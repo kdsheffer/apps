@@ -10,6 +10,109 @@ create table if not exists public.profiles (
   is_super_admin boolean not null default false
 );
 
+-- Wards table (one row per ward)
+create table if not exists public.wards (
+  id uuid primary key default uuid_generate_v4(),
+  name text not null,
+  created_at timestamp with time zone not null default now(),
+  created_by uuid not null references auth.users on delete restrict
+);
+
+-- Ward admins join table (who can edit a specific ward)
+create table if not exists public.ward_admins (
+  id uuid primary key default uuid_generate_v4(),
+  ward_id uuid not null references public.wards on delete cascade,
+  user_id uuid not null references auth.users on delete cascade,
+  granted_by uuid not null references auth.users on delete restrict,
+  granted_at timestamp with time zone not null default now(),
+  unique (ward_id, user_id)
+);
+
+-- Catalog positions (reusable standard positions + ward-specific additions)
+create table if not exists public.catalog_positions (
+  id uuid primary key default uuid_generate_v4(),
+  group_name text not null,
+  position_title text not null,
+  ward_id uuid references public.wards on delete cascade,
+  created_at timestamp with time zone not null default now(),
+  unique (group_name, position_title, ward_id)
+);
+
+-- Boards (versions: promoted, draft, archived)
+do $$ begin
+  create type board_status as enum ('promoted', 'draft', 'archived');
+exception when duplicate_object then null;
+end $$;
+
+create table if not exists public.boards (
+  id uuid primary key default uuid_generate_v4(),
+  ward_id uuid not null references public.wards on delete cascade,
+  status board_status not null default 'draft',
+  name text not null,
+  parent_board_id uuid references public.boards on delete set null,
+  created_by uuid not null references auth.users on delete restrict,
+  created_at timestamp with time zone not null default now(),
+  promoted_at timestamp with time zone
+);
+
+-- Partial unique index: only one promoted board per ward
+create unique index if not exists boards_one_promoted_per_ward
+  on public.boards (ward_id)
+  where status = 'promoted';
+
+-- Groups (organizations like Bishopric, Elders Quorum, etc.)
+create table if not exists public.groups (
+  id uuid primary key default uuid_generate_v4(),
+  board_id uuid not null references public.boards on delete cascade,
+  name text not null,
+  sort_order integer not null default 0,
+  created_at timestamp with time zone not null default now()
+);
+
+-- Positions (callings within a group)
+create table if not exists public.positions (
+  id uuid primary key default uuid_generate_v4(),
+  group_id uuid not null references public.groups on delete cascade,
+  title text not null,
+  sort_order integer not null default 0,
+  created_at timestamp with time zone not null default now()
+);
+
+-- Members (ward members, not board-scoped so they persist across draft copies)
+create table if not exists public.members (
+  id uuid primary key default uuid_generate_v4(),
+  ward_id uuid not null references public.wards on delete cascade,
+  full_name text not null,
+  contact_info jsonb,
+  archived_at timestamp with time zone,
+  created_at timestamp with time zone not null default now()
+);
+
+-- Position assignments (many-to-many join with called_date)
+create table if not exists public.position_assignments (
+  id uuid primary key default uuid_generate_v4(),
+  position_id uuid not null references public.positions on delete cascade,
+  member_id uuid not null references public.members on delete cascade,
+  called_date date not null default current_date,
+  created_at timestamp with time zone not null default now()
+);
+
+-- Imports tracking
+create table if not exists public.imports (
+  id uuid primary key default uuid_generate_v4(),
+  ward_id uuid not null references public.wards on delete cascade,
+  uploaded_by uuid not null references auth.users on delete restrict,
+  file_name text not null,
+  status text not null default 'pending',
+  resulting_board_id uuid references public.boards on delete set null,
+  raw_text text,
+  created_at timestamp with time zone not null default now()
+);
+
+-- ============================================================================
+-- RLS Policies
+-- ============================================================================
+
 alter table public.profiles enable row level security;
 
 create policy "profiles_readable_by_self" on public.profiles
@@ -22,14 +125,6 @@ create policy "profiles_super_admin_can_see_all" on public.profiles
       where id = auth.uid() and is_super_admin = true
     )
   );
-
--- Wards table (one row per ward)
-create table if not exists public.wards (
-  id uuid primary key default uuid_generate_v4(),
-  name text not null,
-  created_at timestamp with time zone not null default now(),
-  created_by uuid not null references auth.users on delete restrict
-);
 
 alter table public.wards enable row level security;
 
@@ -52,16 +147,6 @@ create policy "wards_insertable_by_super_admin" on public.wards
       where id = auth.uid() and is_super_admin = true
     )
   );
-
--- Ward admins join table (who can edit a specific ward)
-create table if not exists public.ward_admins (
-  id uuid primary key default uuid_generate_v4(),
-  ward_id uuid not null references public.wards on delete cascade,
-  user_id uuid not null references auth.users on delete cascade,
-  granted_by uuid not null references auth.users on delete restrict,
-  granted_at timestamp with time zone not null default now(),
-  unique (ward_id, user_id)
-);
 
 alter table public.ward_admins enable row level security;
 
@@ -103,16 +188,6 @@ create policy "ward_admins_deletable_by_super_admin_or_ward_admin" on public.war
     )
   );
 
--- Catalog positions (reusable standard positions + ward-specific additions)
-create table if not exists public.catalog_positions (
-  id uuid primary key default uuid_generate_v4(),
-  group_name text not null,
-  position_title text not null,
-  ward_id uuid references public.wards on delete cascade,
-  created_at timestamp with time zone not null default now(),
-  unique (group_name, position_title, ward_id)
-);
-
 alter table public.catalog_positions enable row level security;
 
 create policy "catalog_positions_readable_by_ward_admin_or_global" on public.catalog_positions
@@ -142,26 +217,7 @@ create policy "catalog_positions_insertable_by_ward_admin" on public.catalog_pos
     )
   );
 
--- Boards (versions: promoted, draft, archived)
-create type board_status as enum ('promoted', 'draft', 'archived');
-
-create table if not exists public.boards (
-  id uuid primary key default uuid_generate_v4(),
-  ward_id uuid not null references public.wards on delete cascade,
-  status board_status not null default 'draft',
-  name text not null,
-  parent_board_id uuid references public.boards on delete set null,
-  created_by uuid not null references auth.users on delete restrict,
-  created_at timestamp with time zone not null default now(),
-  promoted_at timestamp with time zone
-);
-
 alter table public.boards enable row level security;
-
--- Partial unique index: only one promoted board per ward
-create unique index if not exists boards_one_promoted_per_ward
-  on public.boards (ward_id)
-  where status = 'promoted';
 
 create policy "boards_readable_by_ward_admin" on public.boards
   for select using (
@@ -210,15 +266,6 @@ create policy "boards_deletable_by_ward_admin" on public.boards
       where id = auth.uid() and is_super_admin = true
     )
   );
-
--- Groups (organizations like Bishopric, Elders Quorum, etc.)
-create table if not exists public.groups (
-  id uuid primary key default uuid_generate_v4(),
-  board_id uuid not null references public.boards on delete cascade,
-  name text not null,
-  sort_order integer not null default 0,
-  created_at timestamp with time zone not null default now()
-);
 
 alter table public.groups enable row level security;
 
@@ -273,15 +320,6 @@ create policy "groups_deletable_by_ward_admin" on public.groups
       where id = auth.uid() and is_super_admin = true
     )
   );
-
--- Positions (callings within a group)
-create table if not exists public.positions (
-  id uuid primary key default uuid_generate_v4(),
-  group_id uuid not null references public.groups on delete cascade,
-  title text not null,
-  sort_order integer not null default 0,
-  created_at timestamp with time zone not null default now()
-);
 
 alter table public.positions enable row level security;
 
@@ -349,16 +387,6 @@ create policy "positions_deletable_by_ward_admin" on public.positions
     )
   );
 
--- Members (ward members, not board-scoped so they persist across draft copies)
-create table if not exists public.members (
-  id uuid primary key default uuid_generate_v4(),
-  ward_id uuid not null references public.wards on delete cascade,
-  full_name text not null,
-  contact_info jsonb,
-  archived_at timestamp with time zone,
-  created_at timestamp with time zone not null default now()
-);
-
 alter table public.members enable row level security;
 
 create policy "members_readable_by_ward_admin" on public.members
@@ -396,15 +424,6 @@ create policy "members_updatable_by_ward_admin" on public.members
       where id = auth.uid() and is_super_admin = true
     )
   );
-
--- Position assignments (many-to-many join with called_date)
-create table if not exists public.position_assignments (
-  id uuid primary key default uuid_generate_v4(),
-  position_id uuid not null references public.positions on delete cascade,
-  member_id uuid not null references public.members on delete cascade,
-  called_date date not null default current_date,
-  created_at timestamp with time zone not null default now()
-);
 
 alter table public.position_assignments enable row level security;
 
@@ -471,18 +490,6 @@ create policy "position_assignments_deletable_by_ward_admin" on public.position_
       where id = auth.uid() and is_super_admin = true
     )
   );
-
--- Imports tracking
-create table if not exists public.imports (
-  id uuid primary key default uuid_generate_v4(),
-  ward_id uuid not null references public.wards on delete cascade,
-  uploaded_by uuid not null references auth.users on delete restrict,
-  file_name text not null,
-  status text not null default 'pending',
-  resulting_board_id uuid references public.boards on delete set null,
-  raw_text text,
-  created_at timestamp with time zone not null default now()
-);
 
 alter table public.imports enable row level security;
 

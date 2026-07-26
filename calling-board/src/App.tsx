@@ -1,34 +1,38 @@
-import { useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useAuth } from './hooks/useAuth'
+import { LoginPage } from './pages/LoginPage'
+import { WardsPage } from './pages/WardsPage'
 
-function App() {
-  const [count, setCount] = useState(0)
+const queryClient = new QueryClient()
+
+function AppRoutes() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    )
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto py-6 px-4">
-          <h1 className="text-3xl font-bold text-gray-900">Calling Board</h1>
-          <p className="text-gray-600 mt-2">Ward calling management system (Phase 0 Scaffold)</p>
-        </div>
-      </header>
+    <Routes>
+      <Route path="/" element={user ? <Navigate to="/wards" /> : <LoginPage />} />
+      <Route path="/wards" element={user ? <WardsPage /> : <Navigate to="/" />} />
+      <Route path="*" element={<Navigate to={user ? '/wards' : '/'} />} />
+    </Routes>
+  )
+}
 
-      <main className="max-w-7xl mx-auto py-12 px-4">
-        <div className="bg-white rounded-lg shadow p-6">
-          <p className="text-lg text-gray-700 mb-4">
-            Welcome to Calling Board. The app is under development.
-          </p>
-          <button
-            onClick={() => setCount(count + 1)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded"
-          >
-            Count is {count}
-          </button>
-          <p className="text-gray-500 text-sm mt-6">
-            Next: Phase 1 — Database schema & RLS
-          </p>
-        </div>
-      </main>
-    </div>
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </QueryClientProvider>
   )
 }
 
