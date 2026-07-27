@@ -33,23 +33,10 @@ export async function extractTextFromPDF(file: File): Promise<string> {
     const data = await file.arrayBuffer()
     console.log('[PDF] Array buffer created, size:', data.byteLength)
 
-    // Set worker from CORS-friendly CDN
-    try {
-      // Use Mozilla's official PDF.js CDN (CORS-enabled)
-      // @ts-ignore
-      GlobalWorkerOptions.workerSrc = 'https://mozilla.github.io/pdf.js/build/pdf.worker.min.js'
-      console.log('[PDF] Worker configured from Mozilla CDN')
-    } catch (e) {
-      console.warn('[PDF] Could not set worker from Mozilla CDN:', e)
-      // Fallback to jsdelivr which also supports CORS
-      try {
-        // @ts-ignore
-        GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'
-        console.log('[PDF] Worker configured from jsdelivr CDN (fallback)')
-      } catch (e2) {
-        console.error('[PDF] Failed to set worker from any CDN:', e2)
-      }
-    }
+    // Set worker BEFORE creating the document - use absolute path
+    // @ts-ignore
+    GlobalWorkerOptions.workerSrc = new URL('/pdf.worker.mjs', window.location.origin).href
+    console.log('[PDF] Worker configured to:', GlobalWorkerOptions.workerSrc)
 
     // Add timeout wrapper around PDF loading
     const loadPromise = (async () => {
