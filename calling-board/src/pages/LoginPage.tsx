@@ -1,19 +1,9 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 export function LoginPage() {
-  const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
-        navigate('/wards')
-      }
-    })
-  }, [navigate])
 
   const handleGoogleSignIn = async () => {
     setLoading(true)
@@ -21,7 +11,7 @@ export function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/wards`,
+        redirectTo: `${window.location.origin}`,
       },
     })
     if (error) {
@@ -36,7 +26,7 @@ export function LoginPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'apple',
       options: {
-        redirectTo: `${window.location.origin}/wards`,
+        redirectTo: `${window.location.origin}`,
       },
     })
     if (error) {

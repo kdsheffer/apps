@@ -1,13 +1,30 @@
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useAuth } from './hooks/useAuth'
+import { supabase } from './lib/supabase'
+import type { User } from '@supabase/supabase-js'
 import { LoginPage } from './pages/LoginPage'
 import { WardsPage } from './pages/WardsPage'
+import { AdminPage } from './pages/AdminPage'
 
 const queryClient = new QueryClient()
 
 function AppRoutes() {
-  const { user, loading } = useAuth()
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+      setLoading(false)
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => subscription?.unsubscribe()
+  }, [])
 
   if (loading) {
     return (
@@ -21,6 +38,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/" element={user ? <Navigate to="/wards" /> : <LoginPage />} />
       <Route path="/wards" element={user ? <WardsPage /> : <Navigate to="/" />} />
+      <Route path="/admin" element={user ? <AdminPage /> : <Navigate to="/" />} />
       <Route path="*" element={<Navigate to={user ? '/wards' : '/'} />} />
     </Routes>
   )

@@ -23,12 +23,20 @@ export function WardsPage() {
             <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
             <p className="text-sm text-gray-600">{user?.email}</p>
           </div>
-          <button
-            onClick={signOut}
-            className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium"
-          >
-            Sign Out
-          </button>
+          <div className="flex gap-2">
+            <a
+              href="/admin"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-white font-medium"
+            >
+              Admin
+            </a>
+            <button
+              onClick={signOut}
+              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium"
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </header>
 
