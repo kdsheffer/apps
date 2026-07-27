@@ -93,17 +93,35 @@ export function usePDFImport(wardId: string) {
       let totalPositions = 0
 
       // Batch create all groups - handle parent groups first
-      console.log(`[Import] Step 5: Creating ${parsed.groups.length} organizations...`)
+      console.log(`[Import] Step 5: Creating organizations and subgroups...`)
 
       // Separate parent and child groups
       const parentGroups = parsed.groups.filter(g => !g.parentName)
       const childGroups = parsed.groups.filter(g => g.parentName)
 
+      // Collect all parent organization names referenced by child groups
+      const referencedParents = new Set<string>()
+      for (const group of childGroups) {
+        if (group.parentName) {
+          referencedParents.add(group.parentName)
+        }
+      }
+
+      // Create implicit parent groups for any referenced parents that aren't in parentGroups
+      const implicitParents = Array.from(referencedParents).filter(
+        parentName => !parentGroups.some(g => g.name === parentName)
+      )
+
+      const allParentGroups = [
+        ...parentGroups,
+        ...implicitParents.map(name => ({ name, positions: [] }))
+      ]
+
       const groupMap = new Map<string, string>()
 
       // Create parent groups first
-      if (parentGroups.length > 0) {
-        const parentsToCreate = parentGroups.map((group, idx) => ({
+      if (allParentGroups.length > 0) {
+        const parentsToCreate = allParentGroups.map((group, idx) => ({
           board_id: board.id,
           name: group.name,
           sort_order: idx,
@@ -119,6 +137,10 @@ export function usePDFImport(wardId: string) {
         }
 
         createdParents.forEach(g => groupMap.set(g.name, g.id))
+        console.log(`[Import] Created ${createdParents.length} parent organizations`)
+        if (implicitParents.length > 0) {
+          console.log(`[Import] Auto-created implicit parent groups: ${implicitParents.join(', ')}`)
+        }
       }
 
       // Create child groups (subgroups) with parent_id
@@ -143,10 +165,11 @@ export function usePDFImport(wardId: string) {
         }
 
         createdChildren.forEach(g => groupMap.set(g.name, g.id))
+        console.log(`[Import] Created ${createdChildren.length} subgroups`)
       }
 
-      const totalGroups = parentGroups.length + childGroups.length
-      console.log(`[Import] Created ${totalGroups} organizations`)
+      const totalGroups = allParentGroups.length + childGroups.length
+      console.log(`[Import] Total: ${totalGroups} organizations and subgroups`)
 
       // Batch create all positions
       console.log('[Import] Step 6: Creating positions and callings...')
