@@ -20,18 +20,18 @@ export interface ParsedBoard {
 }
 
 export async function extractTextFromPDF(file: File): Promise<string> {
-  // Use dynamic import with proper error handling
-  // @ts-ignore - pdfjs-dist doesn't have proper TS declarations for dynamic import
-  const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
-  const { getDocument, GlobalWorkerOptions } = pdfjs
-
-  // Set worker source for pdfjs-dist
-  // @ts-ignore
-  GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`
-
-  const data = await file.arrayBuffer()
-
   try {
+    // Use dynamic import with proper error handling
+    // @ts-ignore - pdfjs-dist doesn't have proper TS declarations
+    const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
+    const { getDocument, GlobalWorkerOptions } = pdfjs
+
+    // Get the worker URL from the module version
+    // @ts-ignore
+    const pdfjsVersion = pdfjs.version
+    GlobalWorkerOptions.workerSrc = `/node_modules/pdfjs-dist/build/pdf.worker.min.js`
+
+    const data = await file.arrayBuffer()
     const pdf = await getDocument({ data: new Uint8Array(data) }).promise
 
     let fullText = ''
