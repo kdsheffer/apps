@@ -122,14 +122,20 @@ export function parseCallingReport(text: string): ParsedBoard {
   // Strategy: Find all names (things with commas in "Last, First" format) followed by dates
   // Then work backwards to find the position name
   const entryRegex = /([A-Za-z\s,'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})/g
-  const dateRegex = /\d{1,2}\s+[A-Za-z]+\s+\d{4}/
 
   const entries: Array<{ org: string; parentOrg?: string; position: string; name: string; date: string }> = []
 
   let match
   const processedMatches = new Set<number>()
+  let regexMatchCount = 0
 
+  console.log('[Parser] Searching for entries with regex: name + 2+ spaces + date...')
   while ((match = entryRegex.exec(cleanText)) !== null) {
+    regexMatchCount++
+
+    if (regexMatchCount <= 3) {
+      console.log(`[Parser] Match ${regexMatchCount}: "${match[1]}" ... "${match[2]}"`)
+    }
     const fullMatch = match[0]
     const matchIndex = match.index!
     const dateStr = match[2]
@@ -221,7 +227,7 @@ export function parseCallingReport(text: string): ParsedBoard {
     console.log(`[Parser] Entry: [${org}${parentOrg ? ` ← ${parentOrg}` : ''}] "${positionName}" → "${memberName}"`)
   }
 
-  console.log(`[Parser] Found ${entries.length} entries`)
+  console.log(`[Parser] Regex found ${regexMatchCount} total matches, processed ${entries.length} valid entries`)
 
   // Group by organization
   for (const entry of entries) {
