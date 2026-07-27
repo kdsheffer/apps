@@ -203,7 +203,10 @@ export function parseCallingReport(text: string): ParsedBoard {
   console.log(
     `[Parser] Regex found ${tempEntries.length} temp entries → ${entries.length} entries after org assignment → ${deduplicatedEntries.length} after deduplication`
   )
-  console.log('[Parser] Sample entries:', deduplicatedEntries.slice(0, 3))
+  console.log('[Parser] Sample entries:')
+  deduplicatedEntries.slice(0, 5).forEach((e) => {
+    console.log(`  [${e.org}] "${e.position}" → "${e.name}"`)
+  })
 
   // Group by organization and position
   for (const entry of deduplicatedEntries) {
