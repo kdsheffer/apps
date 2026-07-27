@@ -23,7 +23,11 @@ export async function extractTextFromPDF(file: File): Promise<string> {
   // Use dynamic import with proper error handling
   // @ts-ignore - pdfjs-dist doesn't have proper TS declarations for dynamic import
   const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
-  const { getDocument } = pdfjs
+  const { getDocument, GlobalWorkerOptions } = pdfjs
+
+  // Set worker source for pdfjs-dist
+  // @ts-ignore
+  GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`
 
   const data = await file.arrayBuffer()
 
