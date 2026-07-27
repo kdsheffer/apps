@@ -84,10 +84,20 @@ export function BoardPage() {
     )
   }
 
-  const groupedPositions = editingBoardData?.groups.map((group) => ({
-    group,
-    positions: (editingBoardData?.positions || []).filter((p) => p.group_id === group.id),
-  })) || []
+  const positionsIn = (groupId: string) =>
+    (editingBoardData?.positions || []).filter((p) => p.group_id === groupId)
+
+  // Organizations own their subgroups, so render them as a tree rather than a
+  // flat list. An organization may hold only subgroups and no callings itself.
+  const groupTree = (editingBoardData?.groups || [])
+    .filter((group) => !group.parent_id)
+    .map((group) => ({
+      group,
+      positions: positionsIn(group.id),
+      subgroups: (editingBoardData?.groups || [])
+        .filter((candidate) => candidate.parent_id === group.id)
+        .map((subgroup) => ({ group: subgroup, positions: positionsIn(subgroup.id) })),
+    }))
 
   const getMembersForPosition = (positionId: string) => {
     const assignments = editingBoardData?.assignments.filter((a) => a.position_id === positionId) || []
@@ -176,6 +186,164 @@ export function BoardPage() {
 
   const editingBoard = versioning.allBoards.data?.find((b) => b.id === editingBoardId)
 
+  const renderPositionCard = (position: Position) => {
+    const members = getMembersForPosition(position.id)
+    const isOpen = members.length === 0
+
+    return (
+      <div
+        key={position.id}
+        className="border border-gray-200 rounded-lg p-4 bg-gray-50"
+      >
+        {/* Position header */}
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex-1">
+            {editingPosition?.id === position.id ? (
+              <div className="flex flex-col gap-2">
+                <input
+                  autoFocus
+                  type="text"
+                  value={editingPosition.title}
+                  onChange={(e) =>
+                    setEditingPosition({
+                      ...editingPosition,
+                      title: e.target.value,
+                    })
+                  }
+                  className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleRenamePosition}
+                    className="px-2 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setEditingPosition(null)}
+                    className="px-2 py-1 text-sm bg-gray-300 hover:bg-gray-400 text-gray-700 rounded"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <h3 className="font-semibold text-gray-900">{position.title}</h3>
+            )}
+          </div>
+          {!editingPosition?.id && (
+            <div className="flex gap-1 ml-2">
+              <button
+                onClick={() =>
+                  setEditingPosition({ id: position.id, title: position.title })
+                }
+                className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
+              >
+                Rename
+              </button>
+              <button
+                onClick={() => handleDeletePosition(position)}
+                className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded"
+              >
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Members in position */}
+        {isOpen ? (
+          <div className="text-center py-6 text-gray-500 mb-3">
+            <p className="text-sm">Open Calling</p>
+          </div>
+        ) : (
+          <div className="space-y-2 mb-3">
+            {members.map(({ member, assignment }) => (
+              <div
+                key={assignment.id}
+                className="bg-white rounded p-3 border border-blue-200 shadow-sm"
+              >
+                <p className="font-medium text-gray-900">{member?.full_name}</p>
+                {editingAssignmentDate?.id === assignment.id ? (
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      type="date"
+                      value={editingAssignmentDate.date}
+                      onChange={(e) =>
+                        setEditingAssignmentDate({
+                          ...editingAssignmentDate,
+                          date: e.target.value,
+                        })
+                      }
+                      className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={handleUpdateAssignmentDate}
+                      className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={() => setEditingAssignmentDate(null)}
+                      className="px-2 py-1 text-xs bg-gray-300 hover:bg-gray-400 text-gray-700 rounded"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-2 flex items-center justify-between">
+                    <p
+                      className="text-xs text-gray-500 cursor-pointer hover:text-blue-600"
+                      onClick={() =>
+                        setEditingAssignmentDate({
+                          id: assignment.id,
+                          date: assignment.called_date,
+                        })
+                      }
+                    >
+                      {formatTimeInCalling(assignment.called_date)}
+                    </p>
+                    <button
+                      onClick={() => handleUnassign(assignment.id)}
+                      className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
+                    >
+                      Unassign
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add member to position */}
+        <div className="border-t border-gray-200 pt-3">
+          <select
+            defaultValue=""
+            onChange={(e) => {
+              if (e.target.value) {
+                mutations.createAssignment.mutate({
+                  positionId: position.id,
+                  memberId: e.target.value,
+                  calledDate: new Date().toISOString().split('T')[0],
+                })
+                e.target.value = ''
+              }
+            }}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">+ Assign member</option>
+            {activeMembers.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.full_name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
@@ -233,7 +401,7 @@ export function BoardPage() {
           <PDFUpload wardId={wardId || ''} onSuccess={(boardId) => setCurrentBoardId(boardId)} />
 
           {/* Groups */}
-          {groupedPositions.map(({ group, positions }) => (
+          {groupTree.map(({ group, positions, subgroups }) => (
             <div key={group.id} className="bg-white rounded-lg shadow p-6">
               {/* Group header */}
               <div className="flex items-center justify-between mb-6">
@@ -284,165 +452,85 @@ export function BoardPage() {
                 )}
               </div>
 
-              {/* Positions grid */}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
-                {positions.map((position) => {
-                  const members = getMembersForPosition(position.id)
-                  const isOpen = members.length === 0
-
-                  return (
-                    <div
-                      key={position.id}
-                      className="border border-gray-200 rounded-lg p-4 bg-gray-50"
-                    >
-                      {/* Position header */}
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          {editingPosition?.id === position.id ? (
-                            <div className="flex flex-col gap-2">
-                              <input
-                                autoFocus
-                                type="text"
-                                value={editingPosition.title}
-                                onChange={(e) =>
-                                  setEditingPosition({
-                                    ...editingPosition,
-                                    title: e.target.value,
-                                  })
-                                }
-                                className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={handleRenamePosition}
-                                  className="px-2 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={() => setEditingPosition(null)}
-                                  className="px-2 py-1 text-sm bg-gray-300 hover:bg-gray-400 text-gray-700 rounded"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <h3 className="font-semibold text-gray-900">{position.title}</h3>
-                          )}
-                        </div>
-                        {!editingPosition?.id && (
-                          <div className="flex gap-1 ml-2">
-                            <button
-                              onClick={() =>
-                                setEditingPosition({ id: position.id, title: position.title })
-                              }
-                              className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-                            >
-                              Rename
-                            </button>
-                            <button
-                              onClick={() => handleDeletePosition(position)}
-                              className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Members in position */}
-                      {isOpen ? (
-                        <div className="text-center py-6 text-gray-500 mb-3">
-                          <p className="text-sm">Open Calling</p>
+              {/* Subgroups */}
+              {subgroups.map((subgroup) => (
+                <section key={subgroup.group.id} className="mb-6 border-l-4 border-blue-100 pl-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex-1">
+                      {editingGroup?.id === subgroup.group.id ? (
+                        <div className="flex gap-2">
+                          <input
+                            autoFocus
+                            type="text"
+                            value={editingGroup.name}
+                            onChange={(e) =>
+                              setEditingGroup({ ...editingGroup, name: e.target.value })
+                            }
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <button
+                            onClick={handleRenameGroup}
+                            className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingGroup(null)}
+                            className="px-3 py-2 bg-gray-300 hover:bg-gray-400 text-gray-700 rounded font-medium"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       ) : (
-                        <div className="space-y-2 mb-3">
-                          {members.map(({ member, assignment }) => (
-                            <div
-                              key={assignment.id}
-                              className="bg-white rounded p-3 border border-blue-200 shadow-sm"
-                            >
-                              <p className="font-medium text-gray-900">{member?.full_name}</p>
-                              {editingAssignmentDate?.id === assignment.id ? (
-                                <div className="mt-2 flex gap-2">
-                                  <input
-                                    type="date"
-                                    value={editingAssignmentDate.date}
-                                    onChange={(e) =>
-                                      setEditingAssignmentDate({
-                                        ...editingAssignmentDate,
-                                        date: e.target.value,
-                                      })
-                                    }
-                                    className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                  <button
-                                    onClick={handleUpdateAssignmentDate}
-                                    className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded"
-                                  >
-                                    Save
-                                  </button>
-                                  <button
-                                    onClick={() => setEditingAssignmentDate(null)}
-                                    className="px-2 py-1 text-xs bg-gray-300 hover:bg-gray-400 text-gray-700 rounded"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className="mt-2 flex items-center justify-between">
-                                  <p
-                                    className="text-xs text-gray-500 cursor-pointer hover:text-blue-600"
-                                    onClick={() =>
-                                      setEditingAssignmentDate({
-                                        id: assignment.id,
-                                        date: assignment.called_date,
-                                      })
-                                    }
-                                  >
-                                    {formatTimeInCalling(assignment.called_date)}
-                                  </p>
-                                  <button
-                                    onClick={() => handleUnassign(assignment.id)}
-                                    className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-                                  >
-                                    Unassign
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
+                        <h3 className="text-lg font-medium text-gray-700">
+                          {subgroup.group.name}
+                        </h3>
                       )}
-
-                      {/* Add member to position */}
-                      <div className="border-t border-gray-200 pt-3">
-                        <select
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              mutations.createAssignment.mutate({
-                                positionId: position.id,
-                                memberId: e.target.value,
-                                calledDate: new Date().toISOString().split('T')[0],
-                              })
-                              e.target.value = ''
-                            }
-                          }}
-                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">+ Assign member</option>
-                          {activeMembers.map((member) => (
-                            <option key={member.id} value={member.id}>
-                              {member.full_name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
                     </div>
-                  )
-                })}
+                    {!editingGroup?.id && (
+                      <div className="flex gap-2 ml-4">
+                        <button
+                          onClick={() =>
+                            setEditingGroup({
+                              id: subgroup.group.id,
+                              name: subgroup.group.name,
+                            })
+                          }
+                          className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
+                        >
+                          Rename
+                        </button>
+                        <button
+                          onClick={() => handleDeleteGroup(subgroup.group)}
+                          className="px-3 py-1 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-4">
+                    {subgroup.positions.map(renderPositionCard)}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="New position name..."
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAddPosition(subgroup.group.id, e.currentTarget.value)
+                        e.currentTarget.value = ''
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </section>
+              ))}
+
+              {/* Positions grid */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
+                {positions.map(renderPositionCard)}
               </div>
 
               {/* Add position to group */}
