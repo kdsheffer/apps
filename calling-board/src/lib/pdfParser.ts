@@ -109,10 +109,10 @@ export function parseCallingReport(text: string): ParsedBoard {
     .replace(/Calling\s+Name\s+Sustained/gi, ' ')
 
   // Extract all calling entries using regex
-  // Pattern: Position Name (words/hyphens, no comma) + spaces + Member Name (with comma) + spaces + Date + optional checkmark
-  // The key is that names typically have a comma (Last, First format)
+  // Pattern: Position Name (words/hyphens, no comma) + spaces + Member Name (MUST have comma for Last, First) + spaces + Date
+  // The comma is the key delimiter between position and name
   const entryRegex =
-    /([A-Za-z\s-]+?)\s{2,}([A-Za-z\s,'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*✓?/g
+    /([A-Za-z\s-]+?)\s{2,}([A-Za-z\s'-]+,\s*[A-Za-z\s'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*✓?/g
 
   let match
   const entries: Array<{ position: string; name: string; date: string; org: string }> = []
