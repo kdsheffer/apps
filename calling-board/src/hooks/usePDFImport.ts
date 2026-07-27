@@ -92,29 +92,61 @@ export function usePDFImport(wardId: string) {
       console.log(`[Import] Created board: ${boardRes.id}`)
       let totalPositions = 0
 
-      // Batch create all groups
+      // Batch create all groups - handle parent groups first
       console.log(`[Import] Step 5: Creating ${parsed.groups.length} organizations...`)
-      const groupsToCreate = parsed.groups.map((group, idx) => ({
-        board_id: board.id,
-        name: group.name,
-        sort_order: idx,
-      }))
 
-      const { data: createdGroups, error: groupsError } = await supabase
-        .from('groups')
-        .insert(groupsToCreate)
-        .select('id, name')
+      // Separate parent and child groups
+      const parentGroups = parsed.groups.filter(g => !g.parentName)
+      const childGroups = parsed.groups.filter(g => g.parentName)
 
-      if (groupsError || !createdGroups) {
-        throw new Error(`Failed to create groups: ${groupsError?.message}`)
-      }
-      console.log(`[Import] Created ${createdGroups?.length || 0} organizations`)
-
-      // Map old group names to new group IDs
       const groupMap = new Map<string, string>()
-      createdGroups.forEach((group, idx) => {
-        groupMap.set(parsed.groups[idx].name, group.id)
-      })
+
+      // Create parent groups first
+      if (parentGroups.length > 0) {
+        const parentsToCreate = parentGroups.map((group, idx) => ({
+          board_id: board.id,
+          name: group.name,
+          sort_order: idx,
+        }))
+
+        const { data: createdParents, error: parentError } = await supabase
+          .from('groups')
+          .insert(parentsToCreate)
+          .select('id, name')
+
+        if (parentError || !createdParents) {
+          throw new Error(`Failed to create parent groups: ${parentError?.message}`)
+        }
+
+        createdParents.forEach(g => groupMap.set(g.name, g.id))
+      }
+
+      // Create child groups (subgroups) with parent_id
+      if (childGroups.length > 0) {
+        const childrenToCreate = childGroups.map((group, idx) => {
+          const parentId = group.parentName ? groupMap.get(group.parentName) : undefined
+          return {
+            board_id: board.id,
+            name: group.name,
+            parent_id: parentId || null,
+            sort_order: idx,
+          }
+        })
+
+        const { data: createdChildren, error: childError } = await supabase
+          .from('groups')
+          .insert(childrenToCreate)
+          .select('id, name')
+
+        if (childError || !createdChildren) {
+          throw new Error(`Failed to create child groups: ${childError?.message}`)
+        }
+
+        createdChildren.forEach(g => groupMap.set(g.name, g.id))
+      }
+
+      const totalGroups = parentGroups.length + childGroups.length
+      console.log(`[Import] Created ${totalGroups} organizations`)
 
       // Batch create all positions
       console.log('[Import] Step 6: Creating positions and callings...')

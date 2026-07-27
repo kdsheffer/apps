@@ -8,6 +8,7 @@ export interface ParsedCalling {
 export interface ParsedBoard {
   groups: Array<{
     name: string
+    parentName?: string
     positions: Array<{
       title: string
       callings: Array<{
@@ -101,136 +102,154 @@ export function parseCallingReport(text: string): ParsedBoard {
     'Young Men',
     'Primary',
     'Sunday School',
+    'Aaronic Priesthood Quorums',
+    'Melchizedek Priesthood',
   ]
 
-  // Remove header rows first
+  // Subgroup patterns - organizations that appear under parent organizations
+  const subgroupPatterns = [
+    { parent: 'Aaronic Priesthood Quorums', child: 'Presidency of the Aaronic Priesthood' },
+    { parent: 'Aaronic Priesthood Quorums', child: 'Priests Quorum Presidency' },
+    { parent: 'Aaronic Priesthood Quorums', child: 'Teachers Quorum Presidency' },
+    { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Presidency' },
+  ]
+
+  // Remove header rows and normalize spacing
   let cleanText = text
     .replace(/Calling\s+Name\s+Sustained\s+Set Apart/gi, ' ')
     .replace(/Calling\s+Name\s+Sustained/gi, ' ')
 
-  // Extract all calling entries using regex
-  // Pattern: Position Name (words/hyphens, no comma) + spaces + Member Name (MUST have comma for Last, First) + spaces + Date
-  // The comma is the key delimiter between position and name
-  // Important: Hyphen must be escaped or at start/end of character class to avoid creating ranges
-  const entryRegex =
-    /([A-Za-z\s\-]+?)\s{2,}([A-Za-z\s\-']+,\s*[A-Za-z\s\-']+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*✓?/g
+  // Strategy: Find all names (things with commas in "Last, First" format) followed by dates
+  // Then work backwards to find the position name
+  const entryRegex = /([A-Za-z\s,'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})/g
+  const dateRegex = /\d{1,2}\s+[A-Za-z]+\s+\d{4}/
+
+  const entries: Array<{ org: string; parentOrg?: string; position: string; name: string; date: string }> = []
 
   let match
-  const entries: Array<{ position: string; name: string; date: string; org: string }> = []
+  const processedMatches = new Set<number>()
 
-  // First pass: extract entries and find organization assignments
-  const tempEntries: Array<{ position: string; name: string; date: string; index: number }> = []
-
-  let debugCount = 0
   while ((match = entryRegex.exec(cleanText)) !== null) {
-    let positionName = match[1].trim()
-    let memberName = match[2].trim()
-    const dateStr = match[3].trim()
+    const fullMatch = match[0]
+    const matchIndex = match.index!
+    const dateStr = match[2]
 
-    // Debug first 3 matches
-    if (debugCount < 3) {
-      console.log(`[Parser] Match ${debugCount + 1}: pos="${positionName}" name="${memberName}" date="${dateStr}"`)
-      debugCount++
-    }
+    // Skip if we've already processed this match
+    if (processedMatches.has(matchIndex)) continue
+    processedMatches.add(matchIndex)
 
-    // Skip invalid entries
+    // Extract the name/position text before the date
+    const nameAndPositionText = match[1].trim()
+
+    // Split by comma to separate name from potential position info
+    const parts = nameAndPositionText.split(',').map(p => p.trim())
+
+    if (parts.length < 2) continue
+
+    // Last name part is parts[0], first name is parts[1]
+    // Position name is everything before the name
+    const firstName = parts[1]
+    const lastName = parts[0]
+    const memberName = `${lastName}, ${firstName}`
+
+    // Find position: work backwards from the name to find the position
+    const beforeNameIndex = matchIndex
+    const beforeNameText = cleanText.substring(Math.max(0, beforeNameIndex - 200), beforeNameIndex)
+
+    // Extract position: words immediately before the name
+    const positionMatch = beforeNameText.match(/([A-Za-z\s-]+?)(?:\s{2,})?$/)
+    let positionName = positionMatch ? positionMatch[1].trim() : ''
+
+    // Clean up position name (remove common junk)
+    positionName = positionName
+      .replace(/Calling$/i, '')
+      .replace(/^Set Apart$/, '')
+      .trim()
+
+    // Skip if no position or invalid
     if (
-      memberName.toLowerCase() === 'calling vacant' ||
+      !positionName ||
+      positionName.length < 2 ||
       memberName.toLowerCase().includes('calling vacant') ||
       memberName.toLowerCase().includes('name') ||
-      positionName.toLowerCase().includes('calling vacant') ||
-      positionName.toLowerCase().includes('calling') ||
-      positionName.includes('Ward') || // Position names shouldn't start with "Ward"
-      positionName.length < 2 ||
-      memberName.length < 2
+      positionName.toLowerCase().includes('calling')
     ) {
       continue
     }
 
-    tempEntries.push({
-      position: positionName,
-      name: memberName,
-      date: dateStr,
-      index: match.index!,
-    })
-  }
-
-  console.log(`[Parser] Extracted ${tempEntries.length} temp entries`)
-
-  // Second pass: assign organizations to entries
-  for (const entry of tempEntries) {
+    // Determine organization by looking backward in text
     let org = 'Unknown'
+    let parentOrg: string | undefined
 
-    // Check if position name contains an organization name
+    const beforeEntryText = cleanText.substring(0, matchIndex)
+
+    // Find all organization mentions before this entry
+    let lastOrgIndex = -1
+    let lastOrgName = ''
     for (const orgName of organizationNames) {
-      if (entry.position.includes(orgName)) {
-        org = orgName
-        // Remove org name from position if it's at the start
-        if (entry.position.startsWith(orgName)) {
-          entry.position = entry.position.substring(orgName.length).trim()
-        }
+      const idx = beforeEntryText.lastIndexOf(orgName)
+      if (idx > lastOrgIndex) {
+        lastOrgIndex = idx
+        lastOrgName = orgName
+      }
+    }
+
+    // Check if position name contains a subgroup pattern
+    for (const pattern of subgroupPatterns) {
+      if (positionName.includes(pattern.child)) {
+        org = pattern.child
+        parentOrg = pattern.parent
+        // Remove subgroup name from position if it's at start
+        positionName = positionName.replace(pattern.child, '').trim()
         break
       }
     }
 
-    // If no org found in position name, look backward in text
-    if (org === 'Unknown') {
-      const beforeText = cleanText.substring(0, entry.index)
-      // Find the last organization name mentioned before this entry
-      let lastOrgIndex = -1
-      for (const orgName of organizationNames) {
-        const lastIndex = beforeText.lastIndexOf(orgName)
-        if (lastIndex > lastOrgIndex) {
-          lastOrgIndex = lastIndex
-          org = orgName
-        }
-      }
+    // If not a subgroup, use the last organization found
+    if (org === 'Unknown' && lastOrgName) {
+      org = lastOrgName
     }
 
     entries.push({
-      position: entry.position,
-      name: entry.name,
-      date: entry.date,
       org,
+      parentOrg,
+      position: positionName,
+      name: memberName,
+      date: dateStr,
     })
+
+    console.log(`[Parser] Entry: [${org}${parentOrg ? ` ← ${parentOrg}` : ''}] "${positionName}" → "${memberName}"`)
   }
 
-  // Deduplicate entries (same position + name)
-  const seenEntries = new Set<string>()
-  const deduplicatedEntries = []
+  console.log(`[Parser] Found ${entries.length} entries`)
 
+  // Group by organization
   for (const entry of entries) {
-    const key = `${entry.org}|${entry.position}|${entry.name}`
-    if (!seenEntries.has(key)) {
-      seenEntries.add(key)
-      deduplicatedEntries.push(entry)
+    // Get or create parent org if it exists
+    let parentOrgGroup: ParsedBoard['groups'][0] | null = null
+    if (entry.parentOrg) {
+      if (!groupMap.has(entry.parentOrg)) {
+        groupMap.set(entry.parentOrg, {
+          name: entry.parentOrg,
+          positions: [],
+        })
+      }
+      parentOrgGroup = groupMap.get(entry.parentOrg)!
     }
-  }
 
-  console.log(
-    `[Parser] Regex found ${tempEntries.length} temp entries → ${entries.length} entries after org assignment → ${deduplicatedEntries.length} after deduplication`
-  )
-  console.log('[Parser] Sample entries:')
-  deduplicatedEntries.slice(0, 5).forEach((e) => {
-    console.log(`  [${e.org}] "${e.position}" → "${e.name}"`)
-  })
-
-  // Group by organization and position
-  for (const entry of deduplicatedEntries) {
-    // Get or create organization group
+    // Get or create org group
     let group = groupMap.get(entry.org)
     if (!group) {
       group = {
         name: entry.org,
+        parentName: entry.parentOrg,
         positions: [],
       }
       groupMap.set(entry.org, group)
     }
 
     // Get or create position
-    let position = group.positions.find(
-      (p) => p.title.toLowerCase() === entry.position.toLowerCase()
-    )
+    let position = group.positions.find(p => p.title.toLowerCase() === entry.position.toLowerCase())
     if (!position) {
       position = {
         title: entry.position,
@@ -249,11 +268,11 @@ export function parseCallingReport(text: string): ParsedBoard {
     allMembers.add(entry.name)
   }
 
-  const groups = Array.from(groupMap.values()).filter((g) => g.positions.length > 0)
+  const groups = Array.from(groupMap.values()).filter(g => g.positions.length > 0)
 
   console.log(`[Parser] Parsed ${groups.length} organizations with ${allMembers.size} unique members`)
-  groups.forEach((g) => {
-    console.log(`  - ${g.name}: ${g.positions.length} positions`)
+  groups.forEach(g => {
+    console.log(`  - ${g.name}${g.parentName ? ` (under ${g.parentName})` : ''}: ${g.positions.length} positions`)
   })
 
   return {
@@ -281,7 +300,6 @@ function convertDateFormat(dateStr: string): string {
 
   const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/)
   if (!match) {
-    // Default to today if parsing fails
     const today = new Date()
     return today.toISOString().split('T')[0]
   }
