@@ -11,10 +11,12 @@ export function useBoard(wardId: string) {
         .select('*')
         .eq('ward_id', wardId)
         .eq('status', 'promoted')
-        .single()
+        .maybeSingle()
 
+      // A ward with no promoted board yet is a normal state, not an error —
+      // it's where every new ward starts, and where a wiped ward returns to.
       if (error) throw error
-      return data as Board
+      return (data as Board) ?? null
     },
     enabled: !!wardId,
   })

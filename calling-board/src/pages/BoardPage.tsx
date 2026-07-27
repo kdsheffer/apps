@@ -24,8 +24,10 @@ export function BoardPage() {
 
   const [currentBoardId, setCurrentBoardId] = useState<string | null>(null)
 
-  // Determine which board to edit
-  const editingBoardId = currentBoardId || board?.id || ''
+  // A ward can have drafts before anything is promoted — a freshly imported ward
+  // is exactly that — so fall back to the newest board of any status.
+  const newestBoard = versioning.allBoards.data?.[0] ?? null
+  const editingBoardId = currentBoardId || board?.id || newestBoard?.id || ''
 
   // Enable realtime sync for the editing board
   useRealtimeSync(editingBoardId)
@@ -68,11 +70,12 @@ export function BoardPage() {
     )
   }
 
-  if (boardError || !board) {
+  if (boardError) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="text-center">
-          <p className="text-gray-600 mb-4">No promoted board found for this ward.</p>
+          <p className="text-gray-600 mb-4">Couldn't load this ward's board.</p>
+          <p className="text-sm text-gray-500 mb-4">{boardError.message}</p>
           <button
             onClick={() => navigate('/wards')}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-medium"
@@ -80,6 +83,46 @@ export function BoardPage() {
             Back to Wards
           </button>
         </div>
+      </div>
+    )
+  }
+
+  // Nothing has been created for this ward yet — a new ward, or one that's been
+  // wiped. Offer the import rather than dead-ending, since that's the way in.
+  if (!editingBoardId) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-white shadow">
+          <div className="max-w-3xl mx-auto py-4 px-4 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
+            <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => navigate('/wards')}
+                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
+              >
+                Back to Wards
+              </button>
+              <button
+                onClick={signOut}
+                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-3xl mx-auto py-6 px-4 sm:py-12 space-y-6">
+          <div className="bg-white rounded-lg shadow p-8 text-center">
+            <h2 className="text-lg font-semibold text-gray-900">No board yet</h2>
+            <p className="mt-2 text-sm text-gray-600">
+              Import the "Organizations and Callings" report from LCR to build this ward's first
+              board. It comes in as a draft you can review before promoting it.
+            </p>
+          </div>
+
+          <PDFUpload wardId={wardId} onSuccess={(boardId) => setCurrentBoardId(boardId)} />
+        </main>
       </div>
     )
   }
@@ -156,7 +199,7 @@ export function BoardPage() {
 
   const handleAddMember = async () => {
     if (!newMemberName.trim()) return
-    await mutations.addMember.mutateAsync({ wardId: board.ward_id, full_name: newMemberName })
+    await mutations.addMember.mutateAsync({ wardId, full_name: newMemberName })
     setNewMemberName('')
   }
 
@@ -352,7 +395,7 @@ export function BoardPage() {
             <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
             <div className="mt-1 space-y-2">
               <div className="flex items-center gap-3">
-                <p className="text-sm text-gray-600">{editingBoard?.name || board.name}</p>
+                <p className="text-sm text-gray-600">{editingBoard?.name || board?.name}</p>
                 {editingBoard?.status === 'draft' && (
                   <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
                     Draft

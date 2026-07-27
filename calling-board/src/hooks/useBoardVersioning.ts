@@ -30,10 +30,10 @@ export function useBoardVersioning(wardId: string) {
         .select('*')
         .eq('ward_id', wardId)
         .eq('status', 'promoted')
-        .single()
+        .maybeSingle()
 
       if (error) throw error
-      return data as Board
+      return (data as Board) ?? null
     },
     enabled: !!wardId,
   })
