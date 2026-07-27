@@ -179,19 +179,17 @@ export function parseCallingReport(text: string): ParsedBoard {
     for (const pattern of subgroupPatterns) {
       if (positionName.includes(pattern.child)) {
         positionName = positionName.replace(pattern.child, '').trim()
-        // Also strip common suffixes that appear with subgroup names
-        positionName = positionName.replace(/Presidency|Presidents|Leaders/, '').trim()
         break
       }
     }
 
-    // Clean up position name (remove common junk and extract just the role)
+    // Clean up position name (remove organization/quorum references but keep descriptors)
     positionName = positionName
       .replace(/Calling$/i, '')
       .replace(/^Set Apart$/, '')
-      // Extract just the role portion (e.g., "Elders Quorum President" -> "President")
-      .replace(/^[A-Z][a-z]+\s+Quorum\s+/, '')
-      .replace(/^[A-Z][a-z]+\s+/, '')
+      // Remove "Elders Quorum", "Relief Society", "Young Women", etc. prefixes
+      .replace(/^(Elders|Relief|Young|Primary|Sunday)\s+(Quorum|Society|Women|School)\s+/i, '')
+      .replace(/^(Aaronic|Melchizedek|Teachers)\s+Priesthood\s+/, '')
       .trim()
 
     // Skip if no position or invalid
