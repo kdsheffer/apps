@@ -33,19 +33,19 @@ export async function extractTextFromPDF(file: File): Promise<string> {
     const data = await file.arrayBuffer()
     console.log('[PDF] Array buffer created, size:', data.byteLength)
 
-    // Set worker from reliable CDN - use matching version
+    // Set worker from CORS-friendly CDN
     try {
-      // Use unpkg with the same version as the installed package
+      // Use Mozilla's official PDF.js CDN (CORS-enabled)
       // @ts-ignore
-      GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@4.0.269/build/pdf.worker.min.js'
-      console.log('[PDF] Worker configured from unpkg CDN v4.0.269')
+      GlobalWorkerOptions.workerSrc = 'https://mozilla.github.io/pdf.js/build/pdf.worker.min.js'
+      console.log('[PDF] Worker configured from Mozilla CDN')
     } catch (e) {
-      console.warn('[PDF] Could not set worker:', e)
-      // Try alternative
+      console.warn('[PDF] Could not set worker from Mozilla CDN:', e)
+      // Fallback to jsdelivr which also supports CORS
       try {
         // @ts-ignore
-        GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.269/build/pdf.worker.min.js'
-        console.log('[PDF] Worker configured from jsdelivr CDN v4.0.269')
+        GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'
+        console.log('[PDF] Worker configured from jsdelivr CDN (fallback)')
       } catch (e2) {
         console.error('[PDF] Failed to set worker from any CDN:', e2)
       }
