@@ -32,11 +32,15 @@ export function PDFUpload({ wardId, onSuccess }: PDFUploadProps) {
 
     const file = fileInputRef.current.files[0]
     try {
+      console.log('🚀 Starting PDF import from UI...')
       const result = await importMutation.mutateAsync(file)
+      console.log('✅ Import successful! Redirecting to board...')
       // Redirect to the new board
       onSuccess(result.boardId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed')
+      const errorMsg = err instanceof Error ? err.message : 'Import failed'
+      console.error('❌ Import failed:', errorMsg)
+      setError(errorMsg)
     }
   }
 
@@ -70,13 +74,31 @@ export function PDFUpload({ wardId, onSuccess }: PDFUploadProps) {
         {error && <div className="text-sm text-red-600 font-medium">{error}</div>}
 
         {selectedFileName && (
-          <button
-            onClick={handleUpload}
-            disabled={importMutation.isPending}
-            className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {importMutation.isPending ? 'Importing...' : 'Import LCR Data'}
-          </button>
+          <>
+            <button
+              onClick={handleUpload}
+              disabled={importMutation.isPending}
+              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {importMutation.isPending ? 'Importing...' : 'Import LCR Data'}
+            </button>
+            {importMutation.isPending && (
+              <div className="mt-4 p-4 bg-blue-50 rounded border border-blue-200">
+                <div className="text-sm text-blue-700 font-medium mb-2">
+                  🔄 Import in progress...
+                </div>
+                <div className="text-xs text-blue-600 space-y-1">
+                  <div>This may take a minute or two for large files.</div>
+                  <div className="mt-2 font-mono text-blue-500">
+                    Open your browser console (F12) to see detailed progress logs.
+                  </div>
+                  <div className="mt-2 text-blue-600">
+                    Steps: Parsing → Creating Members → Creating Board → Importing Positions & Callings
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         <div className="text-xs text-gray-500 space-y-1">

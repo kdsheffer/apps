@@ -21,6 +21,8 @@ export interface ParsedBoard {
 
 export async function extractTextFromPDF(file: File): Promise<string> {
   try {
+    console.log('[PDF] Starting text extraction from', file.name)
+
     // @ts-ignore - pdfjs-dist doesn't have proper TS declarations
     const pdfjs = await import('pdfjs-dist')
     const { getDocument, GlobalWorkerOptions } = pdfjs
@@ -37,16 +39,21 @@ export async function extractTextFromPDF(file: File): Promise<string> {
       const blob = new Blob([workerCode], { type: 'application/javascript' })
       const workerUrl = URL.createObjectURL(blob)
       GlobalWorkerOptions.workerSrc = workerUrl
+      console.log('[PDF] Worker configured')
     } catch (e) {
       // If inline worker fails, just log it - we'll try anyway
-      console.warn('Failed to setup inline worker:', e)
+      console.warn('[PDF] Failed to setup inline worker:', e)
     }
 
+    console.log('[PDF] Loading PDF document...')
     const data = await file.arrayBuffer()
     const pdf = await getDocument({ data: new Uint8Array(data) }).promise
 
+    console.log(`[PDF] PDF loaded with ${pdf.numPages} pages`)
+
     let fullText = ''
     const maxPages = Math.min(pdf.numPages, 20)
+    console.log(`[PDF] Extracting text from ${maxPages} pages...`)
 
     for (let i = 1; i <= maxPages; i++) {
       try {
@@ -56,20 +63,27 @@ export async function extractTextFromPDF(file: File): Promise<string> {
           .map((item: any) => (item.str ? item.str : ''))
           .join(' ')
         fullText += pageText + '\n'
+
+        if (i % 5 === 0) {
+          console.log(`[PDF] Extracted ${i}/${maxPages} pages...`)
+        }
       } catch (pageError) {
-        console.warn(`Error extracting page ${i}:`, pageError)
+        console.warn(`[PDF] Error extracting page ${i}:`, pageError)
       }
     }
 
+    console.log(`[PDF] Text extraction complete (${fullText.length} characters)`)
     return fullText
   } catch (error) {
-    console.error('PDF extraction error:', error)
+    console.error('[PDF] Extraction error:', error)
     throw new Error(`Failed to extract PDF text: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
 
 export function parseCallingReport(text: string): ParsedBoard {
+  console.log('[Parser] Starting to parse calling report...')
   const lines = text.split('\n').map((line) => line.trim())
+  console.log(`[Parser] Split into ${lines.length} lines`)
 
   const groups: ParsedBoard['groups'] = []
   const allMembers = new Set<string>()
@@ -153,6 +167,11 @@ export function parseCallingReport(text: string): ParsedBoard {
 
   // Clean up empty organizations
   const filteredGroups = groups.filter((g) => g.positions.length > 0)
+
+  console.log(`[Parser] Parsed ${filteredGroups.length} organizations with ${allMembers.size} unique members`)
+  filteredGroups.forEach((g) => {
+    console.log(`  - ${g.name}: ${g.positions.length} positions`)
+  })
 
   return {
     groups: filteredGroups,

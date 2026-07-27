@@ -16,16 +16,24 @@ export function usePDFImport(wardId: string) {
 
   return useMutation({
     mutationFn: async (file: File): Promise<PDFImportResult> => {
+      console.log('[Import] Starting PDF import process')
+      console.log('[Import] File:', file.name, `(${(file.size / 1024 / 1024).toFixed(2)} MB)`)
+
       // Extract text from PDF
+      console.log('[Import] Step 1: Extracting text from PDF...')
       const text = await extractTextFromPDF(file)
 
       // Parse the calling report
+      console.log('[Import] Step 2: Parsing calling report...')
       const parsed = parseCallingReport(text)
+      console.log(`[Import] Parsed: ${parsed.groups.length} groups, ${parsed.allMembers.size} members`)
 
       // Get or create members - optimized batch operation
+      console.log('[Import] Step 3: Managing members...')
       const memberMap = new Map<string, string>() // name -> id
 
       // Fetch existing members for this ward
+      console.log('[Import] Fetching existing members...')
       const { data: existingMembers } = await supabase
         .from('members')
         .select('id, full_name')
@@ -36,12 +44,14 @@ export function usePDFImport(wardId: string) {
       existingMembers?.forEach((member) => {
         memberMap.set(member.full_name, member.id)
       })
+      console.log(`[Import] Found ${existingMembers?.length || 0} existing members`)
 
       // Create new members for any not found - batch insert
       const newMemberNames = Array.from(parsed.allMembers).filter(
         (name) => !memberMap.has(name)
       )
 
+      console.log(`[Import] Creating ${newMemberNames.length} new members...`)
       if (newMemberNames.length > 0) {
         const { data: created } = await supabase
           .from('members')
@@ -56,9 +66,12 @@ export function usePDFImport(wardId: string) {
         created?.forEach((member) => {
           memberMap.set(member.full_name, member.id)
         })
+        console.log(`[Import] Created ${created?.length || 0} new members`)
       }
+      console.log(`[Import] Total members available: ${memberMap.size}`)
 
       // Create draft board
+      console.log('[Import] Step 4: Creating draft board...')
       const boardName = `${file.name} - ${new Date().toLocaleDateString()}`
       const { data: boardRes, error: boardError } = await supabase
         .from('boards')
@@ -76,9 +89,11 @@ export function usePDFImport(wardId: string) {
       }
 
       const board = boardRes as Board
+      console.log(`[Import] Created board: ${boardRes.id}`)
       let totalPositions = 0
 
       // Batch create all groups
+      console.log(`[Import] Step 5: Creating ${parsed.groups.length} organizations...`)
       const groupsToCreate = parsed.groups.map((group, idx) => ({
         board_id: board.id,
         name: group.name,
@@ -93,6 +108,7 @@ export function usePDFImport(wardId: string) {
       if (groupsError || !createdGroups) {
         throw new Error(`Failed to create groups: ${groupsError?.message}`)
       }
+      console.log(`[Import] Created ${createdGroups?.length || 0} organizations`)
 
       // Map old group names to new group IDs
       const groupMap = new Map<string, string>()
@@ -101,6 +117,7 @@ export function usePDFImport(wardId: string) {
       })
 
       // Batch create all positions
+      console.log('[Import] Step 6: Creating positions and callings...')
       const positionsToCreate: any[] = []
       for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
         const group = parsed.groups[gIdx]
@@ -117,6 +134,7 @@ export function usePDFImport(wardId: string) {
         }
       }
 
+      console.log(`[Import] Creating ${positionsToCreate.length} positions...`)
       const { data: createdPositions, error: posError } = await supabase
         .from('positions')
         .insert(positionsToCreate)
@@ -127,6 +145,7 @@ export function usePDFImport(wardId: string) {
       }
 
       totalPositions = createdPositions.length
+      console.log(`[Import] Created ${totalPositions} positions`)
 
       // Build position map: "GroupName:PositionTitle" -> id
       const positionMap = new Map<string, string>()
@@ -144,6 +163,7 @@ export function usePDFImport(wardId: string) {
       }
 
       // Batch create all assignments
+      console.log('[Import] Step 7: Creating member assignments...')
       const assignmentsToCreate: any[] = []
       for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
         const group = parsed.groups[gIdx]
@@ -154,7 +174,7 @@ export function usePDFImport(wardId: string) {
           for (const calling of position.callings) {
             const memberId = memberMap.get(calling.memberName)
             if (!memberId) {
-              console.warn(`Member not found: ${calling.memberName}`)
+              console.warn(`[Import] Member not found: ${calling.memberName}`)
               continue
             }
 
@@ -167,15 +187,21 @@ export function usePDFImport(wardId: string) {
         }
       }
 
+      console.log(`[Import] Creating ${assignmentsToCreate.length} assignments...`)
       if (assignmentsToCreate.length > 0) {
         const { error: assignError } = await supabase
           .from('position_assignments')
           .insert(assignmentsToCreate)
 
         if (assignError) {
-          console.warn(`Some assignments failed: ${assignError.message}`)
+          console.warn(`[Import] Some assignments failed: ${assignError.message}`)
+        } else {
+          console.log(`[Import] Created ${assignmentsToCreate.length} assignments`)
         }
       }
+
+      console.log('[Import] ✅ Import complete!')
+      console.log(`[Import] Summary: ${parsed.groups.length} organizations, ${totalPositions} positions, ${parsed.allMembers.size} members`)
 
       return {
         boardId: board.id,
