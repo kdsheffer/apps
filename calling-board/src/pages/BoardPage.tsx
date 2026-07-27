@@ -11,6 +11,7 @@ import { formatTimeInCalling } from '../lib/timeInCalling'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { BoardVersioning } from '../components/BoardVersioning'
 import { ActiveUsers } from '../components/ActiveUsers'
+import { PDFUpload } from '../components/PDFUpload'
 import type { Group, Position, Member } from '../types'
 
 export function BoardPage() {
@@ -227,6 +228,9 @@ export function BoardPage() {
             currentBoardId={editingBoardId}
             onSwitchBoard={setCurrentBoardId}
           />
+
+          {/* PDF Import */}
+          <PDFUpload wardId={wardId || ''} onSuccess={(boardId) => setCurrentBoardId(boardId)} />
 
           {/* Groups */}
           {groupedPositions.map(({ group, positions }) => (
