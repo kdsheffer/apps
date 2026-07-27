@@ -111,7 +111,9 @@ export function parseCallingReport(text: string): ParsedBoard {
     { parent: 'Aaronic Priesthood Quorums', child: 'Presidency of the Aaronic Priesthood' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Priests Quorum Presidency' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Teachers Quorum Presidency' },
+    { parent: 'Aaronic Priesthood Quorums', child: 'Teachers Quorum Adult Leaders' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Presidency' },
+    { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Adult Leaders' },
   ]
 
   // Remove header rows and normalize spacing
@@ -119,9 +121,9 @@ export function parseCallingReport(text: string): ParsedBoard {
     .replace(/Calling\s+Name\s+Sustained\s+Set Apart/gi, ' ')
     .replace(/Calling\s+Name\s+Sustained/gi, ' ')
 
-  // Strategy: Find all names (things with commas in "Last, First" format) followed by dates
-  // Then work backwards to find the position name
-  const entryRegex = /([A-Za-z\s,'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})/g
+  // Strategy: Match "LastName, FirstName" followed by 2+ spaces and a date
+  // This is more specific to avoid capturing position/org names
+  const entryRegex = /([A-Za-z'-]+),\s+([A-Za-z'-]+)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})/g
 
   const entries: Array<{ org: string; parentOrg?: string; position: string; name: string; date: string }> = []
 
@@ -129,33 +131,31 @@ export function parseCallingReport(text: string): ParsedBoard {
   const processedMatches = new Set<number>()
   let regexMatchCount = 0
 
-  console.log('[Parser] Searching for entries with regex: name + 2+ spaces + date...')
+  // Build a map of subgroup positions in the text
+  const subgroupPositions = new Map<string, number>()
+  for (const pattern of subgroupPatterns) {
+    const idx = cleanText.lastIndexOf(pattern.child)
+    if (idx >= 0) {
+      subgroupPositions.set(pattern.child, idx)
+    }
+  }
+
+  console.log('[Parser] Searching for entries with regex: LastName, FirstName + 2+ spaces + date...')
   while ((match = entryRegex.exec(cleanText)) !== null) {
     regexMatchCount++
 
     if (regexMatchCount <= 3) {
-      console.log(`[Parser] Match ${regexMatchCount}: "${match[1]}" ... "${match[2]}"`)
+      console.log(`[Parser] Match ${regexMatchCount}: "${match[1]}, ${match[2]}" ... "${match[3]}"`)
     }
     const matchIndex = match.index!
-    const dateStr = match[2]
+    const lastName = match[1].trim()
+    const firstName = match[2].trim()
+    const dateStr = match[3]
+    const memberName = `${lastName}, ${firstName}`
 
     // Skip if we've already processed this match
     if (processedMatches.has(matchIndex)) continue
     processedMatches.add(matchIndex)
-
-    // Extract the name/position text before the date
-    const nameAndPositionText = match[1].trim()
-
-    // Split by comma to separate name from potential position info
-    const parts = nameAndPositionText.split(',').map(p => p.trim())
-
-    if (parts.length < 2) continue
-
-    // Last name part is parts[0], first name is parts[1]
-    // Position name is everything before the name
-    const firstName = parts[1]
-    const lastName = parts[0]
-    const memberName = `${lastName}, ${firstName}`
 
     // Find position: work backwards from the name to find the position
     const beforeNameIndex = matchIndex
@@ -164,6 +164,14 @@ export function parseCallingReport(text: string): ParsedBoard {
     // Extract position: words immediately before the name
     const positionMatch = beforeNameText.match(/([A-Za-z\s-]+?)(?:\s{2,})?$/)
     let positionName = positionMatch ? positionMatch[1].trim() : ''
+
+    // Clean up subgroup patterns from position name if they appear
+    for (const pattern of subgroupPatterns) {
+      if (positionName.includes(pattern.child)) {
+        positionName = positionName.replace(pattern.child, '').trim()
+        break
+      }
+    }
 
     // Clean up position name (remove common junk)
     positionName = positionName
@@ -186,33 +194,45 @@ export function parseCallingReport(text: string): ParsedBoard {
     let org = 'Unknown'
     let parentOrg: string | undefined
 
-    const beforeEntryText = cleanText.substring(0, matchIndex)
-
-    // Find all organization mentions before this entry
-    let lastOrgIndex = -1
-    let lastOrgName = ''
-    for (const orgName of organizationNames) {
-      const idx = beforeEntryText.lastIndexOf(orgName)
-      if (idx > lastOrgIndex) {
-        lastOrgIndex = idx
-        lastOrgName = orgName
+    // First, check if any subgroup header appears before this entry
+    let nearestSubgroupIndex = -1
+    let nearestSubgroupName = ''
+    for (const [subgroupName, subgroupIndex] of subgroupPositions.entries()) {
+      if (subgroupIndex < matchIndex && subgroupIndex > nearestSubgroupIndex) {
+        nearestSubgroupIndex = subgroupIndex
+        nearestSubgroupName = subgroupName
       }
     }
 
-    // Check if position name contains a subgroup pattern
-    for (const pattern of subgroupPatterns) {
-      if (positionName.includes(pattern.child)) {
-        org = pattern.child
-        parentOrg = pattern.parent
-        // Remove subgroup name from position if it's at start
-        positionName = positionName.replace(pattern.child, '').trim()
-        break
+    // If we found a nearby subgroup, use it
+    if (nearestSubgroupName) {
+      org = nearestSubgroupName
+      // Find parent org for this subgroup
+      for (const pattern of subgroupPatterns) {
+        if (pattern.child === nearestSubgroupName) {
+          parentOrg = pattern.parent
+          break
+        }
       }
-    }
+    } else {
+      // Otherwise, find organization by looking backward in text
+      const beforeEntryText = cleanText.substring(0, matchIndex)
 
-    // If not a subgroup, use the last organization found
-    if (org === 'Unknown' && lastOrgName) {
-      org = lastOrgName
+      // Find all organization mentions before this entry
+      let lastOrgIndex = -1
+      let lastOrgName = ''
+      for (const orgName of organizationNames) {
+        const idx = beforeEntryText.lastIndexOf(orgName)
+        if (idx > lastOrgIndex) {
+          lastOrgIndex = idx
+          lastOrgName = orgName
+        }
+      }
+
+      // Use the last organization found
+      if (lastOrgName) {
+        org = lastOrgName
+      }
     }
 
     entries.push({
