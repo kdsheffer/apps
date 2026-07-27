@@ -347,8 +347,8 @@ export function BoardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto py-4 px-4 flex justify-between items-center">
-          <div>
+        <div className="max-w-7xl mx-auto py-4 px-4 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
             <div className="mt-1 space-y-2">
               <div className="flex items-center gap-3">
@@ -371,16 +371,16 @@ export function BoardPage() {
               )}
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 shrink-0">
             <button
               onClick={() => navigate('/wards')}
-              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium"
+              className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
             >
               Back to Wards
             </button>
             <button
               onClick={signOut}
-              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium"
+              className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
             >
               Sign Out
             </button>
@@ -388,7 +388,7 @@ export function BoardPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto py-12 px-4">
+      <main className="max-w-7xl mx-auto py-6 px-4 sm:py-12">
         <div className="space-y-8">
           {/* Board Versioning */}
           <BoardVersioning
@@ -401,10 +401,20 @@ export function BoardPage() {
           <PDFUpload wardId={wardId || ''} onSuccess={(boardId) => setCurrentBoardId(boardId)} />
 
           {/* Groups */}
+          {groupTree.length === 0 && (
+            <div className="bg-white rounded-lg shadow p-8 text-center">
+              <h2 className="text-lg font-semibold text-gray-900">This board is empty</h2>
+              <p className="mt-2 text-sm text-gray-600">
+                Import an LCR "Organizations and Callings" PDF above to fill it in, or add an
+                organization by hand below.
+              </p>
+            </div>
+          )}
+
           {groupTree.map(({ group, positions, subgroups }) => (
             <div key={group.id} className="bg-white rounded-lg shadow p-6">
               {/* Group header */}
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex flex-col gap-2 mb-6 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex-1">
                   {editingGroup?.id === group.id ? (
                     <div className="flex gap-2">
@@ -435,7 +445,7 @@ export function BoardPage() {
                   )}
                 </div>
                 {!editingGroup?.id && (
-                  <div className="flex gap-2 ml-4">
+                  <div className="flex gap-2 sm:ml-4">
                     <button
                       onClick={() => setEditingGroup({ id: group.id, name: group.name })}
                       className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
@@ -455,7 +465,7 @@ export function BoardPage() {
               {/* Subgroups */}
               {subgroups.map((subgroup) => (
                 <section key={subgroup.group.id} className="mb-6 border-l-4 border-blue-100 pl-4">
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex flex-col gap-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex-1">
                       {editingGroup?.id === subgroup.group.id ? (
                         <div className="flex gap-2">
@@ -488,7 +498,7 @@ export function BoardPage() {
                       )}
                     </div>
                     {!editingGroup?.id && (
-                      <div className="flex gap-2 ml-4">
+                      <div className="flex gap-2 sm:ml-4">
                         <button
                           onClick={() =>
                             setEditingGroup({
@@ -510,9 +520,13 @@ export function BoardPage() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-4">
-                    {subgroup.positions.map(renderPositionCard)}
-                  </div>
+                  {subgroup.positions.length === 0 ? (
+                    <p className="mb-4 text-sm text-gray-500">No callings in this subgroup yet.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-4">
+                      {subgroup.positions.map(renderPositionCard)}
+                    </div>
+                  )}
 
                   <input
                     type="text"
@@ -529,9 +543,17 @@ export function BoardPage() {
               ))}
 
               {/* Positions grid */}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
-                {positions.map(renderPositionCard)}
-              </div>
+              {positions.length === 0 ? (
+                subgroups.length === 0 && (
+                  <p className="mb-6 text-sm text-gray-500">
+                    No callings here yet. Add one below.
+                  </p>
+                )
+              ) : (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
+                  {positions.map(renderPositionCard)}
+                </div>
+              )}
 
               {/* Add position to group */}
               <div className="border-t border-gray-200 pt-4">
@@ -603,6 +625,13 @@ export function BoardPage() {
                 </button>
               </div>
 
+              {activeMembers.length === 0 && (
+                <p className="text-sm text-gray-500">
+                  No members yet. Add them above, or import an LCR PDF to bring them in with their
+                  callings.
+                </p>
+              )}
+
               <div className="space-y-2">
                 {activeMembers.map((member) => (
                   <div
@@ -622,16 +651,6 @@ export function BoardPage() {
             </div>
           </div>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-700">
-            <p className="font-semibold">Phase 6 Status:</p>
-            <p className="mt-1">✅ Groups/positions CRUD working</p>
-            <p>✅ Members management working</p>
-            <p>✅ Date editing inline</p>
-            <p>✅ Draft creation (deep copy of promoted board)</p>
-            <p>✅ Switch between drafts</p>
-            <p>✅ Promote draft with confirmation (archives old, deletes other drafts)</p>
-            <p className="mt-2">Next: Phase 7 — Realtime sync</p>
-          </div>
         </div>
       </main>
 

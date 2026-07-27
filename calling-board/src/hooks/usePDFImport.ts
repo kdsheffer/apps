@@ -28,6 +28,13 @@ export function usePDFImport(wardId: string) {
       const parsed = parseCallingReport(rows)
       console.log(`[Import] Parsed: ${parsed.groups.length} groups, ${parsed.allMembers.size} members`)
 
+      if (parsed.groups.length === 0) {
+        throw new Error(
+          "No callings found in this PDF. Make sure it's the \"Organizations and Callings\" " +
+            'report exported from LCR, and that it was saved as a PDF rather than scanned or printed to image.'
+        )
+      }
+
       // Get or create members - optimized batch operation
       console.log('[Import] Step 3: Managing members...')
       const memberMap = new Map<string, string>() // name -> id

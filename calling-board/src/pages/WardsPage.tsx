@@ -18,21 +18,21 @@ export function WardsPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto py-4 px-4 flex justify-between items-center">
-          <div>
+        <div className="max-w-7xl mx-auto py-4 px-4 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
-            <p className="text-sm text-gray-600">{user?.email}</p>
+            <p className="text-sm text-gray-600 truncate">{user?.email}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 shrink-0">
             <a
               href="/admin"
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-white font-medium"
+              className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-white font-medium text-center sm:flex-none"
             >
               Admin
             </a>
             <button
               onClick={signOut}
-              className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium"
+              className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
             >
               Sign Out
             </button>
@@ -40,7 +40,7 @@ export function WardsPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto py-12 px-4">
+      <main className="max-w-7xl mx-auto py-6 px-4 sm:py-12">
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded text-red-700">
             Error loading wards: {error.message}
@@ -70,11 +70,6 @@ export function WardsPage() {
               ))}
             </div>
           )}
-        </div>
-
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-700">
-          <p className="font-semibold">Phase 2 Status:</p>
-          <p className="mt-1">Auth UI is working. Next: Phase 3 — Ward & permission admin.</p>
         </div>
       </main>
     </div>

@@ -180,13 +180,6 @@ export function AdminPage() {
             )}
           </div>
         </div>
-
-        <div className="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-700">
-          <p className="font-semibold">Phase 3 Status:</p>
-          <p className="mt-1">
-            Ward creation working. Next: Grant ward_admin permissions to users, then re-enable RLS.
-          </p>
-        </div>
       </main>
     </div>
   )
