@@ -7,9 +7,6 @@ export default defineConfig({
         open: true,
     },
     optimizeDeps: {
-        include: ['pdfjs-dist/build/pdf.mjs'],
-    },
-    ssr: {
-        noExternal: ['pdfjs-dist'],
+        exclude: ['pdfjs-dist'],
     },
 });

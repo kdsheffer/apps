@@ -136,7 +136,6 @@ export function parseCallingReport(text: string): ParsedBoard {
     if (regexMatchCount <= 3) {
       console.log(`[Parser] Match ${regexMatchCount}: "${match[1]}" ... "${match[2]}"`)
     }
-    const fullMatch = match[0]
     const matchIndex = match.index!
     const dateStr = match[2]
 
@@ -231,8 +230,7 @@ export function parseCallingReport(text: string): ParsedBoard {
 
   // Group by organization
   for (const entry of entries) {
-    // Get or create parent org if it exists
-    let parentOrgGroup: ParsedBoard['groups'][0] | null = null
+    // Ensure parent org exists if specified
     if (entry.parentOrg) {
       if (!groupMap.has(entry.parentOrg)) {
         groupMap.set(entry.parentOrg, {
@@ -240,7 +238,6 @@ export function parseCallingReport(text: string): ParsedBoard {
           positions: [],
         })
       }
-      parentOrgGroup = groupMap.get(entry.parentOrg)!
     }
 
     // Get or create org group
