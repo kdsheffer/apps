@@ -6,6 +6,7 @@ import type { User } from '@supabase/supabase-js'
 import { LoginPage } from './pages/LoginPage'
 import { WardsPage } from './pages/WardsPage'
 import { AdminPage } from './pages/AdminPage'
+import { BoardPage } from './pages/BoardPage'
 
 const queryClient = new QueryClient()
 
@@ -38,6 +39,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/" element={user ? <Navigate to="/wards" /> : <LoginPage />} />
       <Route path="/wards" element={user ? <WardsPage /> : <Navigate to="/" />} />
+      <Route path="/wards/:wardId/board" element={user ? <BoardPage /> : <Navigate to="/" />} />
       <Route path="/admin" element={user ? <AdminPage /> : <Navigate to="/" />} />
       <Route path="*" element={<Navigate to={user ? '/wards' : '/'} />} />
     </Routes>

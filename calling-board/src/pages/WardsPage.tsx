@@ -56,16 +56,17 @@ export function WardsPage() {
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {wards.map((ward) => (
-                <button
+                <div
                   key={ward.id}
+                  className="bg-white rounded-lg shadow hover:shadow-lg p-6 transition cursor-pointer"
                   onClick={() => navigate(`/wards/${ward.id}/board`)}
-                  className="bg-white rounded-lg shadow hover:shadow-lg p-6 text-left transition"
                 >
                   <h3 className="text-lg font-semibold text-gray-900">{ward.name}</h3>
                   <p className="text-sm text-gray-500 mt-1">
                     {new Date(ward.created_at).toLocaleDateString()}
                   </p>
-                </button>
+                  <p className="text-xs text-gray-400 mt-2">Click to view board</p>
+                </div>
               ))}
             </div>
           )}
