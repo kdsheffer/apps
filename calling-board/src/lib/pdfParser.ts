@@ -88,99 +88,118 @@ export async function extractTextFromPDF(file: File): Promise<string> {
 
 export function parseCallingReport(text: string): ParsedBoard {
   console.log('[Parser] Starting to parse calling report...')
-  const lines = text.split('\n').map((line) => line.trim())
-  console.log(`[Parser] Split into ${lines.length} lines`)
 
-  const groups: ParsedBoard['groups'] = []
   const allMembers = new Set<string>()
+  const groupMap = new Map<string, ParsedBoard['groups'][0]>()
 
-  let currentOrganization = ''
-  let currentGroup: (typeof groups)[0] | null = null
-
-  // Common organization headers
-  const organizationPatterns = [
-    /^Bishopric$/i,
-    /^Elders Quorum$/i,
-    /^Relief Society$/i,
-    /^Young Women$/i,
-    /^Young Men$/i,
-    /^Primary$/i,
-    /^Sunday School$/i,
+  // Organization names to look for
+  const organizationNames = [
+    'Bishopric',
+    'Elders Quorum',
+    'Relief Society',
+    'Young Women',
+    'Young Men',
+    'Primary',
+    'Sunday School',
   ]
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
+  // Remove header rows first
+  let cleanText = text
+    .replace(/Calling\s+Name\s+Sustained\s+Set Apart/gi, ' ')
+    .replace(/Calling\s+Name\s+Sustained/gi, ' ')
 
-    if (!line) continue
+  // Extract all calling entries using regex
+  // Pattern: Position Name (words/hyphens, no comma) + spaces + Member Name (with comma) + spaces + Date + optional checkmark
+  // The key is that names typically have a comma (Last, First format)
+  const entryRegex =
+    /([A-Za-z\s-]+?)\s{2,}([A-Za-z\s,'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*✓?/g
 
-    // Check if this is an organization header
-    const isOrg = organizationPatterns.some((pattern) => pattern.test(line))
+  let match
+  const entries: Array<{ position: string; name: string; date: string; org: string }> = []
 
-    if (isOrg) {
-      currentOrganization = line
-      currentGroup = {
-        name: currentOrganization,
-        positions: [],
-      }
-      groups.push(currentGroup)
+  // Find all entries
+  while ((match = entryRegex.exec(cleanText)) !== null) {
+    let positionName = match[1].trim()
+    let memberName = match[2].trim()
+    const dateStr = match[3].trim()
+
+    // Skip invalid entries
+    if (
+      memberName.toLowerCase() === 'calling vacant' ||
+      memberName.toLowerCase().includes('name') ||
+      positionName.toLowerCase().includes('calling') ||
+      positionName.length < 2 ||
+      memberName.length < 2
+    ) {
       continue
     }
 
-    // Skip if we haven't found an organization yet
-    if (!currentGroup) continue
+    // Determine which organization this entry belongs to by looking at text before it
+    let org = 'Unknown'
+    const beforeText = cleanText.substring(0, match.index)
 
-    // Look for calling assignment patterns: "Calling Name   Person Name   Date   ✓"
-    // Pattern: word(s), then multiple spaces, then name, then date
-    const callingMatch = line.match(
-      /^([A-Za-z\s]+?)\s{2,}([A-Za-z\s,]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})/
-    )
-
-    if (callingMatch) {
-      const positionName = callingMatch[1].trim()
-      const memberName = callingMatch[2].trim()
-      const dateStr = callingMatch[3].trim()
-
-      // Skip vacant callings
-      if (memberName.toLowerCase() === 'calling vacant') {
-        continue
+    // Find the last organization name mentioned before this entry
+    for (const orgName of organizationNames) {
+      const lastIndex = beforeText.lastIndexOf(orgName)
+      if (lastIndex !== -1) {
+        org = orgName
+        break
       }
-
-      // Convert date format (e.g., "28 Apr 2024" -> "2024-04-28")
-      const calledDate = convertDateFormat(dateStr)
-
-      // Find or create position
-      let position = currentGroup.positions.find(
-        (p) => p.title.toLowerCase() === positionName.toLowerCase()
-      )
-
-      if (!position) {
-        position = {
-          title: positionName,
-          callings: [],
-        }
-        currentGroup.positions.push(position)
-      }
-
-      // Add calling and member
-      position.callings.push({
-        memberName,
-        calledDate,
-      })
-
-      allMembers.add(memberName)
     }
+
+    entries.push({
+      position: positionName,
+      name: memberName,
+      date: dateStr,
+      org,
+    })
   }
 
-  // Clean up empty organizations
-  const filteredGroups = groups.filter((g) => g.positions.length > 0)
+  console.log(`[Parser] Found ${entries.length} calling entries`)
 
-  console.log(`[Parser] Parsed ${filteredGroups.length} organizations with ${allMembers.size} unique members`)
-  filteredGroups.forEach((g) => {
+  // Group by organization and position
+  for (const entry of entries) {
+    // Get or create organization group
+    let group = groupMap.get(entry.org)
+    if (!group) {
+      group = {
+        name: entry.org,
+        positions: [],
+      }
+      groupMap.set(entry.org, group)
+    }
+
+    // Get or create position
+    let position = group.positions.find(
+      (p) => p.title.toLowerCase() === entry.position.toLowerCase()
+    )
+    if (!position) {
+      position = {
+        title: entry.position,
+        callings: [],
+      }
+      group.positions.push(position)
+    }
+
+    // Add calling
+    const calledDate = convertDateFormat(entry.date)
+    position.callings.push({
+      memberName: entry.name,
+      calledDate,
+    })
+
+    allMembers.add(entry.name)
+  }
+
+  const groups = Array.from(groupMap.values()).filter((g) => g.positions.length > 0)
+
+  console.log(`[Parser] Parsed ${groups.length} organizations with ${allMembers.size} unique members`)
+  groups.forEach((g) => {
     console.log(`  - ${g.name}: ${g.positions.length} positions`)
   })
 
   return {
-    groups: filteredGroups,
+    groups,
     allMembers,
   }
 }
