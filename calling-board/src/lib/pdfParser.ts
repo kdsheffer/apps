@@ -25,39 +25,48 @@ export async function extractTextFromPDF(file: File): Promise<string> {
 
     // @ts-ignore - pdfjs-dist doesn't have proper TS declarations
     const pdfjs = await import('pdfjs-dist')
-    const { getDocument, GlobalWorkerOptions } = pdfjs
+    const { getDocument, GlobalWorkerOptions, version } = pdfjs
 
-    // Create an inline worker using a blob data URL to avoid needing a separate worker file
-    // This is a workaround that creates a minimal worker inline
-    try {
-      const workerCode = `
-        self.onmessage = async function(e) {
-          // Simple message passthrough - we'll handle text extraction client-side
-          self.postMessage(e.data);
-        };
-      `
-      const blob = new Blob([workerCode], { type: 'application/javascript' })
-      const workerUrl = URL.createObjectURL(blob)
-      GlobalWorkerOptions.workerSrc = workerUrl
-      console.log('[PDF] Worker configured')
-    } catch (e) {
-      // If inline worker fails, just log it - we'll try anyway
-      console.warn('[PDF] Failed to setup inline worker:', e)
-    }
+    console.log('[PDF] pdfjs-dist version:', version)
 
     console.log('[PDF] Loading PDF document...')
     const data = await file.arrayBuffer()
-    const pdf = await getDocument({ data: new Uint8Array(data) }).promise
+    console.log('[PDF] Array buffer created, size:', data.byteLength)
 
-    console.log(`[PDF] PDF loaded with ${pdf.numPages} pages`)
+    // Try to use worker, but with a timeout
+    try {
+      // @ts-ignore
+      GlobalWorkerOptions.workerSrc = undefined
+    } catch (e) {
+      console.warn('[PDF] Could not disable worker:', e)
+    }
+
+    // Add timeout wrapper around PDF loading
+    const loadPromise = (async () => {
+      console.log('[PDF] Creating PDF document object...')
+      const doc = await getDocument({ data: new Uint8Array(data) }).promise
+      console.log('[PDF] Document object created')
+      return doc
+    })()
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('PDF loading timed out after 30 seconds')), 30000)
+    )
+
+    // @ts-ignore
+    const pdf = await Promise.race([loadPromise, timeoutPromise])
+
+    // @ts-ignore
+    const pdfDoc: any = pdf
+    console.log(`[PDF] PDF loaded with ${pdfDoc.numPages} pages`)
 
     let fullText = ''
-    const maxPages = Math.min(pdf.numPages, 20)
+    const maxPages = Math.min(pdfDoc.numPages, 20)
     console.log(`[PDF] Extracting text from ${maxPages} pages...`)
 
     for (let i = 1; i <= maxPages; i++) {
       try {
-        const page = await pdf.getPage(i)
+        const page = await pdfDoc.getPage(i)
         const textContent = await page.getTextContent()
         const pageText = textContent.items
           .map((item: any) => (item.str ? item.str : ''))
