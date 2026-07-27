@@ -5,9 +5,12 @@ import { useBoard } from '../hooks/useBoard'
 import { useBoardData } from '../hooks/useBoardData'
 import { useBoardMutations } from '../hooks/useBoardMutations'
 import { useBoardVersioning } from '../hooks/useBoardVersioning'
+import { useRealtimeSync } from '../hooks/useRealtimeSync'
+import { usePresence } from '../hooks/usePresence'
 import { formatTimeInCalling } from '../lib/timeInCalling'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { BoardVersioning } from '../components/BoardVersioning'
+import { ActiveUsers } from '../components/ActiveUsers'
 import type { Group, Position, Member } from '../types'
 
 export function BoardPage() {
@@ -19,6 +22,18 @@ export function BoardPage() {
   const versioning = useBoardVersioning(wardId || '')
 
   const [currentBoardId, setCurrentBoardId] = useState<string | null>(null)
+
+  // Determine which board to edit
+  const editingBoardId = currentBoardId || board?.id || ''
+
+  // Enable realtime sync for the editing board
+  useRealtimeSync(editingBoardId)
+
+  // Track active users viewing this board
+  const { activeUsers } = usePresence(editingBoardId)
+  const mutations = useBoardMutations(editingBoardId)
+  const { data: editingBoardData, isLoading: editingDataLoading } = useBoardData(editingBoardId)
+
   const [newGroupName, setNewGroupName] = useState('')
   const [editingGroup, setEditingGroup] = useState<{ id: string; name: string } | null>(null)
   const [editingPosition, setEditingPosition] = useState<{ id: string; title: string } | null>(null)
@@ -39,13 +54,6 @@ export function BoardPage() {
     message: '',
     action: null,
   })
-
-  // Determine which board to edit
-  const editingBoardId = currentBoardId || board?.id || ''
-  const mutations = useBoardMutations(editingBoardId)
-
-  // Fetch data for the currently editing board
-  const { data: editingBoardData, isLoading: editingDataLoading } = useBoardData(editingBoardId)
 
   if (!wardId) {
     return <div className="text-center py-8">Ward not found</div>
@@ -173,17 +181,24 @@ export function BoardPage() {
         <div className="max-w-7xl mx-auto py-4 px-4 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
-            <div className="mt-1 flex items-center gap-3">
-              <p className="text-sm text-gray-600">{editingBoard?.name || board.name}</p>
-              {editingBoard?.status === 'draft' && (
-                <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                  Draft
-                </span>
-              )}
-              {editingBoard?.status === 'promoted' && (
-                <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
-                  Live
-                </span>
+            <div className="mt-1 space-y-2">
+              <div className="flex items-center gap-3">
+                <p className="text-sm text-gray-600">{editingBoard?.name || board.name}</p>
+                {editingBoard?.status === 'draft' && (
+                  <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                    Draft
+                  </span>
+                )}
+                {editingBoard?.status === 'promoted' && (
+                  <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
+                    Live
+                  </span>
+                )}
+              </div>
+              {activeUsers.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <ActiveUsers activeUsers={activeUsers} />
+                </div>
               )}
             </div>
           </div>
