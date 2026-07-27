@@ -66,10 +66,33 @@ export async function extractTextFromPDF(file: File): Promise<string> {
       try {
         const page = await pdfDoc.getPage(i)
         const textContent = await page.getTextContent()
-        const pageText = textContent.items
-          .map((item: any) => (item.str ? item.str : ''))
-          .join(' ')
-        fullText += pageText + '\n'
+
+        // Group text items by Y position to preserve line structure
+        let lastY = -1
+        let currentLine = ''
+        const pageLines: string[] = []
+
+        for (const item of textContent.items as any[]) {
+          const itemY = Math.round(item.transform[5])
+
+          // If Y position changed significantly, start a new line
+          if (lastY !== -1 && Math.abs(itemY - lastY) > 3) {
+            if (currentLine.trim()) {
+              pageLines.push(currentLine.trim())
+            }
+            currentLine = ''
+          }
+
+          currentLine += (item.str ? item.str : '') + ' '
+          lastY = itemY
+        }
+
+        // Add the last line
+        if (currentLine.trim()) {
+          pageLines.push(currentLine.trim())
+        }
+
+        fullText += pageLines.join('\n') + '\n'
 
         if (i % 5 === 0) {
           console.log(`[PDF] Extracted ${i}/${maxPages} pages...`)
@@ -107,6 +130,7 @@ export function parseCallingReport(text: string): ParsedBoard {
   ]
 
   // Subgroup patterns - organizations that appear under parent organizations
+  // These match standalone subgroup header lines in the PDF
   const subgroupPatterns = [
     { parent: 'Aaronic Priesthood Quorums', child: 'Presidency of the Aaronic Priesthood' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Priests Quorum Presidency' },
@@ -115,15 +139,15 @@ export function parseCallingReport(text: string): ParsedBoard {
     { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Presidency' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Adult Leaders' },
     { parent: 'Elders Quorum', child: 'Elders Quorum Presidency' },
-    { parent: 'Elders Quorum', child: 'Teachers Elders Quorum' },
-    { parent: 'Elders Quorum', child: 'Ministering Elders Quorum' },
-    { parent: 'Elders Quorum', child: 'Activities Elders Quorum' },
-    { parent: 'Elders Quorum', child: 'Service Elders Quorum' },
+    { parent: 'Elders Quorum', child: 'Teachers' },
+    { parent: 'Elders Quorum', child: 'Ministering' },
+    { parent: 'Elders Quorum', child: 'Activities' },
+    { parent: 'Elders Quorum', child: 'Service' },
     { parent: 'Relief Society', child: 'Relief Society Presidency' },
-    { parent: 'Relief Society', child: 'Teachers Relief Society' },
-    { parent: 'Relief Society', child: 'Ministering Relief Society' },
-    { parent: 'Relief Society', child: 'Activities Relief Society' },
-    { parent: 'Relief Society', child: 'Service Relief Society' },
+    { parent: 'Relief Society', child: 'Teachers' },
+    { parent: 'Relief Society', child: 'Ministering' },
+    { parent: 'Relief Society', child: 'Activities' },
+    { parent: 'Relief Society', child: 'Service' },
   ]
 
   // Remove header rows and normalize spacing
@@ -142,11 +166,19 @@ export function parseCallingReport(text: string): ParsedBoard {
   let regexMatchCount = 0
 
   // Build a map of subgroup positions in the text
+  // Look for subgroup names on their own lines (newline before and after)
   const subgroupPositions = new Map<string, number>()
   for (const pattern of subgroupPatterns) {
-    const idx = cleanText.lastIndexOf(pattern.child)
-    if (idx >= 0) {
-      subgroupPositions.set(pattern.child, idx)
+    // Search for the subgroup name as a standalone line
+    const regex = new RegExp(`\\n${pattern.child}\\n`, 'g')
+    let match
+    let lastIndex = -1
+    while ((match = regex.exec(cleanText)) !== null) {
+      lastIndex = match.index + 1 // Point to start of line content
+    }
+    if (lastIndex >= 0) {
+      subgroupPositions.set(pattern.child, lastIndex)
+      console.log(`[Parser] Found subgroup "${pattern.child}" at position ${lastIndex}`)
     }
   }
 
