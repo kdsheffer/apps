@@ -121,10 +121,17 @@ export function parseCallingReport(text: string): ParsedBoard {
   // First pass: extract entries and find organization assignments
   const tempEntries: Array<{ position: string; name: string; date: string; index: number }> = []
 
+  let debugCount = 0
   while ((match = entryRegex.exec(cleanText)) !== null) {
     let positionName = match[1].trim()
     let memberName = match[2].trim()
     const dateStr = match[3].trim()
+
+    // Debug first 3 matches
+    if (debugCount < 3) {
+      console.log(`[Parser] Match ${debugCount + 1}: pos="${positionName}" name="${memberName}" date="${dateStr}"`)
+      debugCount++
+    }
 
     // Skip invalid entries
     if (
