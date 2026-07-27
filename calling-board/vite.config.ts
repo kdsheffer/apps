@@ -7,4 +7,10 @@ export default defineConfig({
     port: 5173,
     open: true,
   },
+  optimizeDeps: {
+    include: ['pdfjs-dist/build/pdf.mjs'],
+  },
+  ssr: {
+    noExternal: ['pdfjs-dist'],
+  },
 })

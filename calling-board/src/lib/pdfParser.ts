@@ -20,21 +20,36 @@ export interface ParsedBoard {
 }
 
 export async function extractTextFromPDF(file: File): Promise<string> {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  // Use dynamic import with proper error handling
+  // @ts-ignore - pdfjs-dist doesn't have proper TS declarations for dynamic import
+  const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
+  const { getDocument } = pdfjs
+
   const data = await file.arrayBuffer()
-  const pdf = await getDocument({ data: new Uint8Array(data) }).promise
 
-  let fullText = ''
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i)
-    const textContent = await page.getTextContent()
-    const pageText = textContent.items
-      .map((item: any) => (item.str ? item.str : ''))
-      .join(' ')
-    fullText += pageText + '\n'
+  try {
+    const pdf = await getDocument({ data: new Uint8Array(data) }).promise
+
+    let fullText = ''
+    const maxPages = Math.min(pdf.numPages, 20) // Limit to first 20 pages for performance
+
+    for (let i = 1; i <= maxPages; i++) {
+      try {
+        const page = await pdf.getPage(i)
+        const textContent = await page.getTextContent()
+        const pageText = textContent.items
+          .map((item: any) => (item.str ? item.str : ''))
+          .join(' ')
+        fullText += pageText + '\n'
+      } catch (pageError) {
+        console.warn(`Error extracting page ${i}:`, pageError)
+      }
+    }
+
+    return fullText
+  } catch (error) {
+    throw new Error(`Failed to extract PDF text: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
-
-  return fullText
 }
 
 export function parseCallingReport(text: string): ParsedBoard {
