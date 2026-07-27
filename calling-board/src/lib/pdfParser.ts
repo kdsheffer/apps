@@ -111,8 +111,9 @@ export function parseCallingReport(text: string): ParsedBoard {
   // Extract all calling entries using regex
   // Pattern: Position Name (words/hyphens, no comma) + spaces + Member Name (MUST have comma for Last, First) + spaces + Date
   // The comma is the key delimiter between position and name
+  // Important: Hyphen must be escaped or at start/end of character class to avoid creating ranges
   const entryRegex =
-    /([A-Za-z\s-]+?)\s{2,}([A-Za-z\s'-]+,\s*[A-Za-z\s'-]+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*✓?/g
+    /([A-Za-z\s\-]+?)\s{2,}([A-Za-z\s\-']+,\s*[A-Za-z\s\-']+?)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s*✓?/g
 
   let match
   const entries: Array<{ position: string; name: string; date: string; org: string }> = []
@@ -128,8 +129,11 @@ export function parseCallingReport(text: string): ParsedBoard {
     // Skip invalid entries
     if (
       memberName.toLowerCase() === 'calling vacant' ||
+      memberName.toLowerCase().includes('calling vacant') ||
       memberName.toLowerCase().includes('name') ||
+      positionName.toLowerCase().includes('calling vacant') ||
       positionName.toLowerCase().includes('calling') ||
+      positionName.includes('Ward') || // Position names shouldn't start with "Ward"
       positionName.length < 2 ||
       memberName.length < 2
     ) {
