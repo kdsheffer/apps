@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
-import { extractTextFromPDF, parseCallingReport } from '../lib/pdfParser'
+import { extractRowsFromPDF, parseCallingReport } from '../lib/pdfParser'
 import type { Board } from '../types'
 
 interface PDFImportResult {
@@ -21,11 +21,11 @@ export function usePDFImport(wardId: string) {
 
       // Extract text from PDF
       console.log('[Import] Step 1: Extracting text from PDF...')
-      const text = await extractTextFromPDF(file)
+      const rows = await extractRowsFromPDF(file)
 
       // Parse the calling report
       console.log('[Import] Step 2: Parsing calling report...')
-      const parsed = parseCallingReport(text)
+      const parsed = parseCallingReport(rows)
       console.log(`[Import] Parsed: ${parsed.groups.length} groups, ${parsed.allMembers.size} members`)
 
       // Get or create members - optimized batch operation
@@ -92,101 +92,94 @@ export function usePDFImport(wardId: string) {
       console.log(`[Import] Created board: ${boardRes.id}`)
       let totalPositions = 0
 
-      // Batch create all groups - handle parent groups first
       console.log(`[Import] Step 5: Creating organizations and subgroups...`)
 
-      // Separate parent and child groups
-      const parentGroups = parsed.groups.filter(g => !g.parentName)
-      const childGroups = parsed.groups.filter(g => g.parentName)
+      // Top-level names are unique across the report, but subgroup names are not
+      // — "Teachers" and "Music" each appear under several organizations — so
+      // subgroups are keyed by parent as well as name.
+      const subgroupKey = (parentName: string, name: string) => `${parentName} › ${name}`
 
-      // Collect all parent organization names referenced by child groups
-      const referencedParents = new Set<string>()
-      for (const group of childGroups) {
-        if (group.parentName) {
-          referencedParents.add(group.parentName)
-        }
+      // An organization that only holds subgroups has no callings of its own, so
+      // it never shows up as a parsed group. Create those parents anyway.
+      const topLevelNames = new Set<string>()
+      for (const group of parsed.groups) {
+        topLevelNames.add(group.parentName ?? group.name)
       }
 
-      // Create implicit parent groups for any referenced parents that aren't in parentGroups
-      const implicitParents = Array.from(referencedParents).filter(
-        parentName => !parentGroups.some(g => g.name === parentName)
-      )
-
-      const allParentGroups = [
-        ...parentGroups,
-        ...implicitParents.map(name => ({ name, positions: [] }))
-      ]
-
-      const groupMap = new Map<string, string>()
-
-      // Create parent groups first
-      if (allParentGroups.length > 0) {
-        const parentsToCreate = allParentGroups.map((group, idx) => ({
-          board_id: board.id,
-          name: group.name,
-          sort_order: idx,
-        }))
-
-        const { data: createdParents, error: parentError } = await supabase
-          .from('groups')
-          .insert(parentsToCreate)
-          .select('id, name')
-
-        if (parentError || !createdParents) {
-          throw new Error(`Failed to create parent groups: ${parentError?.message}`)
-        }
-
-        createdParents.forEach(g => groupMap.set(g.name, g.id))
-        console.log(`[Import] Created ${createdParents.length} parent organizations`)
-        if (implicitParents.length > 0) {
-          console.log(`[Import] Auto-created implicit parent groups: ${implicitParents.join(', ')}`)
-        }
-      }
-
-      // Create child groups (subgroups) with parent_id
-      if (childGroups.length > 0) {
-        const childrenToCreate = childGroups.map((group, idx) => {
-          const parentId = group.parentName ? groupMap.get(group.parentName) : undefined
-          return {
+      const topLevelIds = new Map<string, string>()
+      const { data: createdParents, error: parentError } = await supabase
+        .from('groups')
+        .insert(
+          Array.from(topLevelNames).map((name, idx) => ({
             board_id: board.id,
-            name: group.name,
-            parent_id: parentId || null,
+            name,
             sort_order: idx,
-          }
-        })
+          }))
+        )
+        .select('id, name')
 
+      if (parentError || !createdParents) {
+        throw new Error(`Failed to create organizations: ${parentError?.message}`)
+      }
+      createdParents.forEach((g) => topLevelIds.set(g.name, g.id))
+      console.log(`[Import] Created ${createdParents.length} organizations`)
+
+      // Create subgroups, pointing each at its parent organization.
+      const childGroups = parsed.groups.filter((g) => g.parentName)
+      const subgroupIds = new Map<string, string>()
+
+      if (childGroups.length > 0) {
         const { data: createdChildren, error: childError } = await supabase
           .from('groups')
-          .insert(childrenToCreate)
+          .insert(
+            childGroups.map((group, idx) => ({
+              board_id: board.id,
+              name: group.name,
+              parent_id: topLevelIds.get(group.parentName!) ?? null,
+              sort_order: idx,
+            }))
+          )
           .select('id, name')
 
         if (childError || !createdChildren) {
-          throw new Error(`Failed to create child groups: ${childError?.message}`)
+          throw new Error(`Failed to create subgroups: ${childError?.message}`)
         }
 
-        createdChildren.forEach(g => groupMap.set(g.name, g.id))
+        // Insert order is preserved, so zip the results back onto the parsed
+        // groups; matching by name alone would collide on repeated subgroups.
+        createdChildren.forEach((created, idx) => {
+          const source = childGroups[idx]
+          subgroupIds.set(subgroupKey(source.parentName!, source.name), created.id)
+        })
         console.log(`[Import] Created ${createdChildren.length} subgroups`)
       }
 
-      const totalGroups = allParentGroups.length + childGroups.length
-      console.log(`[Import] Total: ${totalGroups} organizations and subgroups`)
+      const groupIdFor = (group: (typeof parsed.groups)[number]) =>
+        group.parentName
+          ? subgroupIds.get(subgroupKey(group.parentName, group.name))
+          : topLevelIds.get(group.name)
 
       // Batch create all positions
       console.log('[Import] Step 6: Creating positions and callings...')
+
+      // A title can repeat within a group — four "Teachers Quorum Adviser" seats,
+      // for example — so keep an ordered list of the parsed positions alongside
+      // the insert payload and pair them up by index afterwards.
       const positionsToCreate: any[] = []
-      for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
-        const group = parsed.groups[gIdx]
-        const groupId = groupMap.get(group.name)
+      const positionSources: (typeof parsed.groups)[number]['positions'] = []
+
+      for (const group of parsed.groups) {
+        const groupId = groupIdFor(group)
         if (!groupId) continue
 
-        for (let pIdx = 0; pIdx < group.positions.length; pIdx++) {
-          const position = group.positions[pIdx]
+        group.positions.forEach((position, pIdx) => {
           positionsToCreate.push({
             group_id: groupId,
             title: position.title,
             sort_order: pIdx,
           })
-        }
+          positionSources.push(position)
+        })
       }
 
       console.log(`[Import] Creating ${positionsToCreate.length} positions...`)
@@ -202,45 +195,27 @@ export function usePDFImport(wardId: string) {
       totalPositions = createdPositions.length
       console.log(`[Import] Created ${totalPositions} positions`)
 
-      // Build position map: "GroupName:PositionTitle" -> id
-      const positionMap = new Map<string, string>()
-      let posIdx = 0
-      for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
-        const group = parsed.groups[gIdx]
-        for (let pIdx = 0; pIdx < group.positions.length; pIdx++) {
-          const position = group.positions[pIdx]
-          const createdPos = createdPositions[posIdx]
-          if (createdPos) {
-            positionMap.set(`${group.name}:${position.title}`, createdPos.id)
-          }
-          posIdx++
-        }
-      }
-
       // Batch create all assignments
       console.log('[Import] Step 7: Creating member assignments...')
       const assignmentsToCreate: any[] = []
-      for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
-        const group = parsed.groups[gIdx]
-        for (const position of group.positions) {
-          const positionId = positionMap.get(`${group.name}:${position.title}`)
-          if (!positionId) continue
+      createdPositions.forEach((createdPosition, idx) => {
+        const source = positionSources[idx]
+        if (!source) return
 
-          for (const calling of position.callings) {
-            const memberId = memberMap.get(calling.memberName)
-            if (!memberId) {
-              console.warn(`[Import] Member not found: ${calling.memberName}`)
-              continue
-            }
-
-            assignmentsToCreate.push({
-              position_id: positionId,
-              member_id: memberId,
-              called_date: calling.calledDate,
-            })
+        for (const calling of source.callings) {
+          const memberId = memberMap.get(calling.memberName)
+          if (!memberId) {
+            console.warn(`[Import] Member not found: ${calling.memberName}`)
+            continue
           }
+
+          assignmentsToCreate.push({
+            position_id: createdPosition.id,
+            member_id: memberId,
+            called_date: calling.calledDate,
+          })
         }
-      }
+      })
 
       console.log(`[Import] Creating ${assignmentsToCreate.length} assignments...`)
       if (assignmentsToCreate.length > 0) {
@@ -261,7 +236,7 @@ export function usePDFImport(wardId: string) {
       return {
         boardId: board.id,
         boardName: board.name,
-        groupCount: parsed.groups.length,
+        groupCount: topLevelNames.size + childGroups.length,
         positionCount: totalPositions,
         memberCount: parsed.allMembers.size,
       }

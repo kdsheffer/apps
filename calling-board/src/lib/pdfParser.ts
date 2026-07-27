@@ -1,8 +1,27 @@
-export interface ParsedCalling {
-  organizationName: string
-  positionName: string
-  memberName: string
-  calledDate: string
+/**
+ * Parser for LCR "Organizations and Callings" PDF reports.
+ *
+ * The report's layout encodes its own hierarchy, so we read structure from
+ * geometry rather than guessing from the text:
+ *
+ *   x=34, height 12   organization header      e.g. "Elders Quorum"
+ *   x=34, height  9   subgroup header          e.g. "Elders Quorum Presidency"
+ *   x=35, height  8   table header row         "Calling | Name | Sustained | Set Apart"
+ *   x=37, height  8   calling row              title | member | date | checkmark
+ *   x=54, height  8   roster table header      "Name | Age | Birth Date | ..."
+ *   x=34, height  8   "Count: N" — ends the current table
+ *
+ * Sections whose header ends in "Members" are membership rosters, not callings.
+ */
+
+export interface PDFCell {
+  x: number
+  text: string
+}
+
+export interface PDFRow {
+  height: number
+  cells: PDFCell[]
 }
 
 export interface ParsedBoard {
@@ -20,361 +39,202 @@ export interface ParsedBoard {
   allMembers: Set<string>
 }
 
-export async function extractTextFromPDF(file: File): Promise<string> {
-  try {
-    console.log('[PDF] Starting text extraction from', file.name)
+const HEADER_X = 34
+const X_TOLERANCE = 4
+const GROUP_HEIGHT = 12
+/** Subgroups come in two sizes; nested ones share the body text height. */
+const SUBGROUP_HEIGHTS = [9, 8]
+const BODY_HEIGHT = 8
 
-    // @ts-ignore - pdfjs-dist doesn't have proper TS declarations
-    const pdfjs = await import('pdfjs-dist')
-    const { getDocument, GlobalWorkerOptions, version } = pdfjs
+export async function extractRowsFromPDF(file: File): Promise<PDFRow[]> {
+  console.log('[PDF] Starting extraction from', file.name)
 
-    console.log('[PDF] pdfjs-dist version:', version)
+  // @ts-ignore - pdfjs-dist ships its own types under a subpath we don't reference
+  const pdfjs = await import('pdfjs-dist')
+  const { getDocument, GlobalWorkerOptions, version } = pdfjs
+  console.log('[PDF] pdfjs-dist version:', version)
 
-    console.log('[PDF] Loading PDF document...')
-    const data = await file.arrayBuffer()
-    console.log('[PDF] Array buffer created, size:', data.byteLength)
+  // @ts-ignore
+  GlobalWorkerOptions.workerSrc = new URL('/pdf.worker.mjs', window.location.origin).href
 
-    // Set worker BEFORE creating the document - use absolute path
-    // @ts-ignore
-    GlobalWorkerOptions.workerSrc = new URL('/pdf.worker.mjs', window.location.origin).href
-    console.log('[PDF] Worker configured to:', GlobalWorkerOptions.workerSrc)
+  const data = await file.arrayBuffer()
+  const pdf: any = await getDocument({ data: new Uint8Array(data) }).promise
+  console.log(`[PDF] Loaded ${pdf.numPages} pages`)
 
-    // Add timeout wrapper around PDF loading
-    const loadPromise = (async () => {
-      console.log('[PDF] Creating PDF document object...')
-      const doc = await getDocument({ data: new Uint8Array(data) }).promise
-      console.log('[PDF] Document object created')
-      return doc
-    })()
+  const rows: PDFRow[] = []
 
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('PDF loading timed out after 30 seconds')), 30000)
-    )
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const textContent = await page.getTextContent()
 
-    // @ts-ignore
-    const pdf = await Promise.race([loadPromise, timeoutPromise])
+    // Bucket items into rows by their baseline Y, allowing a small tolerance so
+    // that cells nudged a fraction of a point still land on the same row.
+    const buckets: Array<{ y: number; height: number; cells: PDFCell[] }> = []
 
-    // @ts-ignore
-    const pdfDoc: any = pdf
-    console.log(`[PDF] PDF loaded with ${pdfDoc.numPages} pages`)
+    for (const item of textContent.items as any[]) {
+      if (!item.str || !item.str.trim()) continue
 
-    let fullText = ''
-    const maxPages = Math.min(pdfDoc.numPages, 20)
-    console.log(`[PDF] Extracting text from ${maxPages} pages...`)
+      const y = item.transform[5]
+      const x = Math.round(item.transform[4])
+      const height = Math.round(item.height ?? 0)
 
-    for (let i = 1; i <= maxPages; i++) {
-      try {
-        const page = await pdfDoc.getPage(i)
-        const textContent = await page.getTextContent()
-
-        // Group text items by Y position to preserve line structure
-        let lastY = -1
-        let currentLine = ''
-        const pageLines: string[] = []
-
-        for (const item of textContent.items as any[]) {
-          const itemY = Math.round(item.transform[5])
-
-          // If Y position changed significantly, start a new line
-          if (lastY !== -1 && Math.abs(itemY - lastY) > 3) {
-            if (currentLine.trim()) {
-              pageLines.push(currentLine.trim())
-            }
-            currentLine = ''
-          }
-
-          currentLine += (item.str ? item.str : '') + ' '
-          lastY = itemY
-        }
-
-        // Add the last line
-        if (currentLine.trim()) {
-          pageLines.push(currentLine.trim())
-        }
-
-        fullText += pageLines.join('\n') + '\n'
-
-        if (i % 5 === 0) {
-          console.log(`[PDF] Extracted ${i}/${maxPages} pages...`)
-        }
-      } catch (pageError) {
-        console.warn(`[PDF] Error extracting page ${i}:`, pageError)
+      let bucket = buckets.find((b) => Math.abs(b.y - y) <= 2)
+      if (!bucket) {
+        bucket = { y, height, cells: [] }
+        buckets.push(bucket)
       }
+      bucket.height = Math.max(bucket.height, height)
+      bucket.cells.push({ x, text: item.str.trim() })
     }
 
-    console.log(`[PDF] Text extraction complete (${fullText.length} characters)`)
-    return fullText
-  } catch (error) {
-    console.error('[PDF] Extraction error:', error)
-    throw new Error(`Failed to extract PDF text: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    buckets.sort((a, b) => b.y - a.y)
+    for (const bucket of buckets) {
+      bucket.cells.sort((a, b) => a.x - b.x)
+      rows.push({ height: bucket.height, cells: bucket.cells })
+    }
   }
+
+  console.log(`[PDF] Extracted ${rows.length} rows`)
+  return rows
 }
 
-export function parseCallingReport(text: string): ParsedBoard {
-  console.log('[Parser] Starting to parse calling report...')
+/** Headings sit alone in the left margin, one indent step out from table rows. */
+function isHeadingSlot(row: PDFRow): boolean {
+  return row.cells.length === 1 && Math.abs(row.cells[0].x - HEADER_X) <= X_TOLERANCE
+}
+
+/** Roster sections list membership, not callings. */
+function isRosterHeading(name: string): boolean {
+  return /\bMembers$/i.test(name)
+}
+
+export function parseCallingReport(rows: PDFRow[]): ParsedBoard {
+  console.log('[Parser] Parsing calling report...')
 
   const allMembers = new Set<string>()
   const groupMap = new Map<string, ParsedBoard['groups'][0]>()
 
-  // Organization names to look for
-  const organizationNames = [
-    'Bishopric',
-    'Elders Quorum',
-    'Relief Society',
-    'Young Women',
-    'Young Men',
-    'Primary',
-    'Sunday School',
-    'Aaronic Priesthood Quorums',
-    'Melchizedek Priesthood',
-  ]
+  let currentGroup = ''
+  let currentSubgroup = ''
+  // Column x-positions captured from the active "Calling | Name | Sustained" header.
+  let columns: number[] | null = null
 
-  // Subgroup patterns - organizations that appear under parent organizations
-  // These match standalone subgroup header lines in the PDF
-  const subgroupPatterns = [
-    { parent: 'Aaronic Priesthood Quorums', child: 'Presidency of the Aaronic Priesthood' },
-    { parent: 'Aaronic Priesthood Quorums', child: 'Priests Quorum Presidency' },
-    { parent: 'Aaronic Priesthood Quorums', child: 'Teachers Quorum Presidency' },
-    { parent: 'Aaronic Priesthood Quorums', child: 'Teachers Quorum Adult Leaders' },
-    { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Presidency' },
-    { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Adult Leaders' },
-    { parent: 'Elders Quorum', child: 'Elders Quorum Presidency' },
-    { parent: 'Elders Quorum', child: 'Teachers' },
-    { parent: 'Elders Quorum', child: 'Ministering' },
-    { parent: 'Elders Quorum', child: 'Activities' },
-    { parent: 'Elders Quorum', child: 'Service' },
-    { parent: 'Relief Society', child: 'Relief Society Presidency' },
-    { parent: 'Relief Society', child: 'Teachers' },
-    { parent: 'Relief Society', child: 'Ministering' },
-    { parent: 'Relief Society', child: 'Activities' },
-    { parent: 'Relief Society', child: 'Service' },
-  ]
+  const keyFor = (group: string, subgroup: string) =>
+    subgroup ? `${group} › ${subgroup}` : group
 
-  // Remove header rows and normalize spacing
-  let cleanText = text
-    .replace(/Calling\s+Name\s+Sustained\s+Set Apart/gi, ' ')
-    .replace(/Calling\s+Name\s+Sustained/gi, ' ')
+  for (const row of rows) {
+    const first = row.cells[0]
+    if (!first) continue
 
-  // Strategy: Match "LastName, FirstName" followed by 2+ spaces and a date
-  // This is more specific to avoid capturing position/org names
-  const entryRegex = /([A-Za-z'-]+),\s+([A-Za-z'-]+)\s{2,}(\d{1,2}\s+[A-Za-z]+\s+\d{4})/g
-
-  const entries: Array<{ org: string; parentOrg?: string; position: string; name: string; date: string }> = []
-
-  let match
-  const processedMatches = new Set<number>()
-  let regexMatchCount = 0
-
-  // Build a map of subgroup positions in the text
-  // Look for subgroup names on their own lines (newline before and after)
-  const subgroupPositions = new Map<string, number>()
-  for (const pattern of subgroupPatterns) {
-    // Search for the subgroup name as a standalone line
-    const regex = new RegExp(`\\n${pattern.child}\\n`, 'g')
-    let match
-    let lastIndex = -1
-    while ((match = regex.exec(cleanText)) !== null) {
-      lastIndex = match.index + 1 // Point to start of line content
-    }
-    if (lastIndex >= 0) {
-      subgroupPositions.set(pattern.child, lastIndex)
-      console.log(`[Parser] Found subgroup "${pattern.child}" at position ${lastIndex}`)
-    }
-  }
-
-  console.log('[Parser] Searching for entries with regex: LastName, FirstName + 2+ spaces + date...')
-  while ((match = entryRegex.exec(cleanText)) !== null) {
-    regexMatchCount++
-
-    if (regexMatchCount <= 3) {
-      console.log(`[Parser] Match ${regexMatchCount}: "${match[1]}, ${match[2]}" ... "${match[3]}"`)
-    }
-    const matchIndex = match.index!
-    const lastName = match[1].trim()
-    const firstName = match[2].trim()
-    const dateStr = match[3]
-    const memberName = `${lastName}, ${firstName}`
-
-    // Skip if we've already processed this match
-    if (processedMatches.has(matchIndex)) continue
-    processedMatches.add(matchIndex)
-
-    // Find position: work backwards from the name to find the position
-    const beforeNameIndex = matchIndex
-    const beforeNameText = cleanText.substring(Math.max(0, beforeNameIndex - 200), beforeNameIndex)
-
-    // Extract position: words immediately before the name
-    const positionMatch = beforeNameText.match(/([A-Za-z\s-]+?)(?:\s{2,})?$/)
-    let positionName = positionMatch ? positionMatch[1].trim() : ''
-
-    // Clean up subgroup patterns from position name if they appear
-    for (const pattern of subgroupPatterns) {
-      if (positionName.includes(pattern.child)) {
-        positionName = positionName.replace(pattern.child, '').trim()
-        break
-      }
-    }
-
-    // Clean up position name (remove organization/quorum references but keep descriptors)
-    positionName = positionName
-      .replace(/Calling$/i, '')
-      .replace(/^Set Apart$/, '')
-      // Remove "Elders Quorum", "Relief Society", "Young Women", etc. prefixes
-      .replace(/^(Elders|Relief|Young|Primary|Sunday)\s+(Quorum|Society|Women|School)\s+/i, '')
-      .replace(/^(Aaronic|Melchizedek|Teachers)\s+Priesthood\s+/, '')
-      .trim()
-
-    // Skip if no position or invalid
-    if (
-      !positionName ||
-      positionName.length < 2 ||
-      memberName.toLowerCase().includes('calling vacant') ||
-      memberName.toLowerCase().includes('name') ||
-      positionName.toLowerCase().includes('calling')
-    ) {
+    // --- Organization header -------------------------------------------------
+    if (isHeadingSlot(row) && row.height === GROUP_HEIGHT) {
+      columns = null
+      if (isRosterHeading(first.text)) continue
+      currentGroup = first.text
+      currentSubgroup = ''
+      console.log(`[Parser] Organization: ${currentGroup}`)
       continue
     }
 
-    // Determine organization by looking backward in text
-    let org = 'Unknown'
-    let parentOrg: string | undefined
-
-    // First, check if any subgroup header appears before this entry
-    let nearestSubgroupIndex = -1
-    let nearestSubgroupName = ''
-    for (const [subgroupName, subgroupIndex] of subgroupPositions.entries()) {
-      if (subgroupIndex < matchIndex && subgroupIndex > nearestSubgroupIndex) {
-        nearestSubgroupIndex = subgroupIndex
-        nearestSubgroupName = subgroupName
-      }
+    // --- Table boundaries ----------------------------------------------------
+    if (first.text === 'Calling' && row.cells.length > 1) {
+      // Column positions vary per table, so read them off each header row.
+      columns = row.cells.map((c) => c.x)
+      continue
     }
 
-    // If we found a nearby subgroup, use it
-    if (nearestSubgroupName) {
-      org = nearestSubgroupName
-      // Find parent org for this subgroup
-      for (const pattern of subgroupPatterns) {
-        if (pattern.child === nearestSubgroupName) {
-          parentOrg = pattern.parent
-          break
+    if (first.text === 'Name' && row.cells.length > 1) {
+      columns = null
+      continue
+    }
+
+    // Row counts and footnotes close out a table. Both sit in the heading slot,
+    // which keeps them from swallowing custom callings — those are marked with a
+    // leading asterisk too, but live in the table body.
+    if (isHeadingSlot(row) && (/^Count:/.test(first.text) || first.text.startsWith('*'))) {
+      columns = null
+      continue
+    }
+
+    // --- Subgroup header -----------------------------------------------------
+    if (isHeadingSlot(row) && SUBGROUP_HEIGHTS.includes(row.height)) {
+      columns = null
+      currentSubgroup = isRosterHeading(first.text) ? '' : first.text
+      if (currentSubgroup) console.log(`[Parser]   Subgroup: ${currentSubgroup}`)
+      continue
+    }
+
+    // --- Calling row ---------------------------------------------------------
+    // Page headers and footers share the subgroup text size, so require body
+    // height here to keep them out of the table.
+    if (!columns || !currentGroup || row.height !== BODY_HEIGHT) continue
+
+    // Assign each cell to its nearest column.
+    const byColumn: string[] = []
+    for (const cell of row.cells) {
+      let nearest = 0
+      let bestDistance = Infinity
+      for (let c = 0; c < columns.length; c++) {
+        const distance = Math.abs(cell.x - columns[c])
+        if (distance < bestDistance) {
+          bestDistance = distance
+          nearest = c
         }
       }
-    } else {
-      // Otherwise, find organization by looking backward in text
-      const beforeEntryText = cleanText.substring(0, matchIndex)
-
-      // Find all organization mentions before this entry
-      let lastOrgIndex = -1
-      let lastOrgName = ''
-      for (const orgName of organizationNames) {
-        const idx = beforeEntryText.lastIndexOf(orgName)
-        if (idx > lastOrgIndex) {
-          lastOrgIndex = idx
-          lastOrgName = orgName
-        }
-      }
-
-      // Use the last organization found
-      if (lastOrgName) {
-        org = lastOrgName
-      }
+      byColumn[nearest] = byColumn[nearest] ? `${byColumn[nearest]} ${cell.text}` : cell.text
     }
 
-    entries.push({
-      org,
-      parentOrg,
-      position: positionName,
-      name: memberName,
-      date: dateStr,
-    })
+    const title = (byColumn[0] ?? '').replace(/^\*\s*/, '').trim()
+    const memberName = (byColumn[1] ?? '').trim()
+    const dateStr = (byColumn[2] ?? '').trim()
 
-    console.log(`[Parser] Entry: [${org}${parentOrg ? ` ← ${parentOrg}` : ''}] "${positionName}" → "${memberName}"`)
-  }
+    if (!title) continue
 
-  console.log(`[Parser] Regex found ${regexMatchCount} total matches, processed ${entries.length} valid entries`)
+    const groupName = currentSubgroup || currentGroup
+    const parentName = currentSubgroup ? currentGroup : undefined
+    const key = keyFor(currentGroup, currentSubgroup)
 
-  // Group by organization
-  for (const entry of entries) {
-    // Ensure parent org exists if specified
-    if (entry.parentOrg) {
-      if (!groupMap.has(entry.parentOrg)) {
-        groupMap.set(entry.parentOrg, {
-          name: entry.parentOrg,
-          positions: [],
-        })
-      }
-    }
-
-    // Get or create org group
-    let group = groupMap.get(entry.org)
+    let group = groupMap.get(key)
     if (!group) {
-      group = {
-        name: entry.org,
-        parentName: entry.parentOrg,
-        positions: [],
-      }
-      groupMap.set(entry.org, group)
+      group = { name: groupName, parentName, positions: [] }
+      groupMap.set(key, group)
     }
 
-    // Get or create position
-    let position = group.positions.find(p => p.title.toLowerCase() === entry.position.toLowerCase())
-    if (!position) {
-      position = {
-        title: entry.position,
-        callings: [],
-      }
-      group.positions.push(position)
+    // The same title can appear several times (multiple teachers, advisers, and
+    // so on); each occurrence is a distinct seat, so give it its own position.
+    const position = { title, callings: [] as Array<{ memberName: string; calledDate: string }> }
+    group.positions.push(position)
+
+    if (memberName && !/^Calling Vacant$/i.test(memberName)) {
+      position.callings.push({ memberName, calledDate: convertDateFormat(dateStr) })
+      allMembers.add(memberName)
     }
-
-    // Add calling
-    const calledDate = convertDateFormat(entry.date)
-    position.callings.push({
-      memberName: entry.name,
-      calledDate,
-    })
-
-    allMembers.add(entry.name)
   }
 
-  const groups = Array.from(groupMap.values()).filter(g => g.positions.length > 0)
+  const groups = Array.from(groupMap.values()).filter((g) => g.positions.length > 0)
 
-  console.log(`[Parser] Parsed ${groups.length} organizations with ${allMembers.size} unique members`)
-  groups.forEach(g => {
-    console.log(`  - ${g.name}${g.parentName ? ` (under ${g.parentName})` : ''}: ${g.positions.length} positions`)
+  console.log(`[Parser] Parsed ${groups.length} groups with ${allMembers.size} unique members`)
+  groups.forEach((g) => {
+    console.log(
+      `  - ${g.parentName ? `${g.parentName} › ` : ''}${g.name}: ${g.positions.length} positions`
+    )
   })
 
-  return {
-    groups,
-    allMembers,
-  }
+  return { groups, allMembers }
 }
 
 function convertDateFormat(dateStr: string): string {
-  // Convert "28 Apr 2024" to "2024-04-28"
   const months: Record<string, string> = {
-    jan: '01',
-    feb: '02',
-    mar: '03',
-    apr: '04',
-    may: '05',
-    jun: '06',
-    jul: '07',
-    aug: '08',
-    sep: '09',
-    oct: '10',
-    nov: '11',
-    dec: '12',
+    jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+    jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
   }
 
   const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/)
   if (!match) {
-    const today = new Date()
-    return today.toISOString().split('T')[0]
+    return new Date().toISOString().split('T')[0]
   }
 
   const day = match[1].padStart(2, '0')
-  const month = months[match[2].toLowerCase()]
-  const year = match[3]
-
-  return `${year}-${month}-${day}`
+  const month = months[match[2].slice(0, 3).toLowerCase()] ?? '01'
+  return `${match[3]}-${month}-${day}`
 }
