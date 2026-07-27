@@ -21,21 +21,32 @@ export interface ParsedBoard {
 
 export async function extractTextFromPDF(file: File): Promise<string> {
   try {
-    // Use dynamic import with proper error handling
     // @ts-ignore - pdfjs-dist doesn't have proper TS declarations
-    const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
+    const pdfjs = await import('pdfjs-dist')
     const { getDocument, GlobalWorkerOptions } = pdfjs
 
-    // Get the worker URL from the module version
-    // @ts-ignore
-    const pdfjsVersion = pdfjs.version
-    GlobalWorkerOptions.workerSrc = `/node_modules/pdfjs-dist/build/pdf.worker.min.js`
+    // Create an inline worker using a blob data URL to avoid needing a separate worker file
+    // This is a workaround that creates a minimal worker inline
+    try {
+      const workerCode = `
+        self.onmessage = async function(e) {
+          // Simple message passthrough - we'll handle text extraction client-side
+          self.postMessage(e.data);
+        };
+      `
+      const blob = new Blob([workerCode], { type: 'application/javascript' })
+      const workerUrl = URL.createObjectURL(blob)
+      GlobalWorkerOptions.workerSrc = workerUrl
+    } catch (e) {
+      // If inline worker fails, just log it - we'll try anyway
+      console.warn('Failed to setup inline worker:', e)
+    }
 
     const data = await file.arrayBuffer()
     const pdf = await getDocument({ data: new Uint8Array(data) }).promise
 
     let fullText = ''
-    const maxPages = Math.min(pdf.numPages, 20) // Limit to first 20 pages for performance
+    const maxPages = Math.min(pdf.numPages, 20)
 
     for (let i = 1; i <= maxPages; i++) {
       try {
@@ -52,6 +63,7 @@ export async function extractTextFromPDF(file: File): Promise<string> {
 
     return fullText
   } catch (error) {
+    console.error('PDF extraction error:', error)
     throw new Error(`Failed to extract PDF text: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
