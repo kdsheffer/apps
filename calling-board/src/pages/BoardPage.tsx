@@ -4,8 +4,10 @@ import { useAuth } from '../hooks/useAuth'
 import { useBoard } from '../hooks/useBoard'
 import { useBoardData } from '../hooks/useBoardData'
 import { useBoardMutations } from '../hooks/useBoardMutations'
+import { useBoardVersioning } from '../hooks/useBoardVersioning'
 import { formatTimeInCalling } from '../lib/timeInCalling'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { BoardVersioning } from '../components/BoardVersioning'
 import type { Group, Position, Member } from '../types'
 
 export function BoardPage() {
@@ -13,8 +15,10 @@ export function BoardPage() {
   const navigate = useNavigate()
   const { signOut } = useAuth()
   const { data: board, isLoading: boardLoading, error: boardError } = useBoard(wardId || '')
-  const { data: boardData, isLoading: dataLoading } = useBoardData(board?.id)
+  const { isLoading: dataLoading } = useBoardData(board?.id)
+  const versioning = useBoardVersioning(wardId || '')
 
+  const [currentBoardId, setCurrentBoardId] = useState<string | null>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [editingGroup, setEditingGroup] = useState<{ id: string; name: string } | null>(null)
   const [editingPosition, setEditingPosition] = useState<{ id: string; title: string } | null>(null)
@@ -36,13 +40,18 @@ export function BoardPage() {
     action: null,
   })
 
-  const mutations = useBoardMutations(board?.id || '')
+  // Determine which board to edit
+  const editingBoardId = currentBoardId || board?.id || ''
+  const mutations = useBoardMutations(editingBoardId)
+
+  // Fetch data for the currently editing board
+  const { data: editingBoardData, isLoading: editingDataLoading } = useBoardData(editingBoardId)
 
   if (!wardId) {
     return <div className="text-center py-8">Ward not found</div>
   }
 
-  if (boardLoading || dataLoading) {
+  if (boardLoading || dataLoading || editingDataLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-gray-600">Loading board...</div>
@@ -66,15 +75,15 @@ export function BoardPage() {
     )
   }
 
-  const groupedPositions = boardData?.groups.map((group) => ({
+  const groupedPositions = editingBoardData?.groups.map((group) => ({
     group,
-    positions: (boardData?.positions || []).filter((p) => p.group_id === group.id),
+    positions: (editingBoardData?.positions || []).filter((p) => p.group_id === group.id),
   })) || []
 
   const getMembersForPosition = (positionId: string) => {
-    const assignments = boardData?.assignments.filter((a) => a.position_id === positionId) || []
+    const assignments = editingBoardData?.assignments.filter((a) => a.position_id === positionId) || []
     return assignments.map((a) => {
-      const member = boardData?.members.find((m) => m.id === a.member_id)
+      const member = editingBoardData?.members.find((m) => m.id === a.member_id)
       return { member, assignment: a }
     })
   }
@@ -154,7 +163,9 @@ export function BoardPage() {
     setEditingAssignmentDate(null)
   }
 
-  const activeMembers = (boardData?.members || []).filter((m) => !m.archived_at)
+  const activeMembers = (editingBoardData?.members || []).filter((m) => !m.archived_at)
+
+  const editingBoard = versioning.allBoards.data?.find((b) => b.id === editingBoardId)
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -162,7 +173,19 @@ export function BoardPage() {
         <div className="max-w-7xl mx-auto py-4 px-4 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
-            <p className="text-sm text-gray-600">{board.name}</p>
+            <div className="mt-1 flex items-center gap-3">
+              <p className="text-sm text-gray-600">{editingBoard?.name || board.name}</p>
+              {editingBoard?.status === 'draft' && (
+                <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                  Draft
+                </span>
+              )}
+              {editingBoard?.status === 'promoted' && (
+                <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
+                  Live
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex gap-2">
             <button
@@ -183,6 +206,13 @@ export function BoardPage() {
 
       <main className="max-w-7xl mx-auto py-12 px-4">
         <div className="space-y-8">
+          {/* Board Versioning */}
+          <BoardVersioning
+            wardId={wardId || ''}
+            currentBoardId={editingBoardId}
+            onSwitchBoard={setCurrentBoardId}
+          />
+
           {/* Groups */}
           {groupedPositions.map(({ group, positions }) => (
             <div key={group.id} className="bg-white rounded-lg shadow p-6">
@@ -486,11 +516,14 @@ export function BoardPage() {
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-700">
-            <p className="font-semibold">Phase 5 Status:</p>
+            <p className="font-semibold">Phase 6 Status:</p>
             <p className="mt-1">✅ Groups/positions CRUD working</p>
             <p>✅ Members management working</p>
             <p>✅ Date editing inline</p>
-            <p className="mt-2">Next: Phase 6 — Versioning (draft/promote)</p>
+            <p>✅ Draft creation (deep copy of promoted board)</p>
+            <p>✅ Switch between drafts</p>
+            <p>✅ Promote draft with confirmation (archives old, deletes other drafts)</p>
+            <p className="mt-2">Next: Phase 7 — Realtime sync</p>
           </div>
         </div>
       </main>
