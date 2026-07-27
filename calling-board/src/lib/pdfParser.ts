@@ -117,7 +117,9 @@ export function parseCallingReport(text: string): ParsedBoard {
   let match
   const entries: Array<{ position: string; name: string; date: string; org: string }> = []
 
-  // Find all entries
+  // First pass: extract entries and find organization assignments
+  const tempEntries: Array<{ position: string; name: string; date: string; index: number }> = []
+
   while ((match = entryRegex.exec(cleanText)) !== null) {
     let positionName = match[1].trim()
     let memberName = match[2].trim()
@@ -134,31 +136,70 @@ export function parseCallingReport(text: string): ParsedBoard {
       continue
     }
 
-    // Determine which organization this entry belongs to by looking at text before it
-    let org = 'Unknown'
-    const beforeText = cleanText.substring(0, match.index)
+    tempEntries.push({
+      position: positionName,
+      name: memberName,
+      date: dateStr,
+      index: match.index!,
+    })
+  }
 
-    // Find the last organization name mentioned before this entry
+  console.log(`[Parser] Extracted ${tempEntries.length} temp entries`)
+
+  // Second pass: assign organizations to entries
+  for (const entry of tempEntries) {
+    let org = 'Unknown'
+
+    // Check if position name contains an organization name
     for (const orgName of organizationNames) {
-      const lastIndex = beforeText.lastIndexOf(orgName)
-      if (lastIndex !== -1) {
+      if (entry.position.includes(orgName)) {
         org = orgName
+        // Remove org name from position if it's at the start
+        if (entry.position.startsWith(orgName)) {
+          entry.position = entry.position.substring(orgName.length).trim()
+        }
         break
       }
     }
 
+    // If no org found in position name, look backward in text
+    if (org === 'Unknown') {
+      const beforeText = cleanText.substring(0, entry.index)
+      // Find the last organization name mentioned before this entry
+      let lastOrgIndex = -1
+      for (const orgName of organizationNames) {
+        const lastIndex = beforeText.lastIndexOf(orgName)
+        if (lastIndex > lastOrgIndex) {
+          lastOrgIndex = lastIndex
+          org = orgName
+        }
+      }
+    }
+
     entries.push({
-      position: positionName,
-      name: memberName,
-      date: dateStr,
+      position: entry.position,
+      name: entry.name,
+      date: entry.date,
       org,
     })
   }
 
-  console.log(`[Parser] Found ${entries.length} calling entries`)
+  // Deduplicate entries (same position + name)
+  const seenEntries = new Set<string>()
+  const deduplicatedEntries = []
+
+  for (const entry of entries) {
+    const key = `${entry.org}|${entry.position}|${entry.name}`
+    if (!seenEntries.has(key)) {
+      seenEntries.add(key)
+      deduplicatedEntries.push(entry)
+    }
+  }
+
+  console.log(`[Parser] Found ${entries.length} calling entries, ${deduplicatedEntries.length} after deduplication`)
 
   // Group by organization and position
-  for (const entry of entries) {
+  for (const entry of deduplicatedEntries) {
     // Get or create organization group
     let group = groupMap.get(entry.org)
     if (!group) {
