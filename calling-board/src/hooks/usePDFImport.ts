@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
 import { extractTextFromPDF, parseCallingReport } from '../lib/pdfParser'
-import type { Board, Group, Position } from '../types'
+import type { Board } from '../types'
 
 interface PDFImportResult {
   boardId: string
@@ -22,22 +22,22 @@ export function usePDFImport(wardId: string) {
       // Parse the calling report
       const parsed = parseCallingReport(text)
 
-      // Get or create members
+      // Get or create members - optimized batch operation
       const memberMap = new Map<string, string>() // name -> id
 
       // Fetch existing members for this ward
       const { data: existingMembers } = await supabase
         .from('members')
-        .select('*')
+        .select('id, full_name')
         .eq('ward_id', wardId)
-        .eq('archived_at', null)
+        .is('archived_at', null)
 
       // Map existing members
       existingMembers?.forEach((member) => {
         memberMap.set(member.full_name, member.id)
       })
 
-      // Create new members for any not found
+      // Create new members for any not found - batch insert
       const newMemberNames = Array.from(parsed.allMembers).filter(
         (name) => !memberMap.has(name)
       )
@@ -51,7 +51,7 @@ export function usePDFImport(wardId: string) {
               full_name: name,
             }))
           )
-          .select()
+          .select('id, full_name')
 
         created?.forEach((member) => {
           memberMap.set(member.full_name, member.id)
@@ -68,7 +68,7 @@ export function usePDFImport(wardId: string) {
           name: boardName,
           created_by: (await supabase.auth.getUser()).data.user?.id,
         })
-        .select()
+        .select('id')
         .single()
 
       if (boardError || !boardRes) {
@@ -78,44 +78,79 @@ export function usePDFImport(wardId: string) {
       const board = boardRes as Board
       let totalPositions = 0
 
-      // Create groups and positions
-      for (const group of parsed.groups) {
-        const { data: groupRes, error: groupError } = await supabase
-          .from('groups')
-          .insert({
-            board_id: board.id,
-            name: group.name,
-            sort_order: parsed.groups.indexOf(group),
+      // Batch create all groups
+      const groupsToCreate = parsed.groups.map((group, idx) => ({
+        board_id: board.id,
+        name: group.name,
+        sort_order: idx,
+      }))
+
+      const { data: createdGroups, error: groupsError } = await supabase
+        .from('groups')
+        .insert(groupsToCreate)
+        .select('id, name')
+
+      if (groupsError || !createdGroups) {
+        throw new Error(`Failed to create groups: ${groupsError?.message}`)
+      }
+
+      // Map old group names to new group IDs
+      const groupMap = new Map<string, string>()
+      createdGroups.forEach((group, idx) => {
+        groupMap.set(parsed.groups[idx].name, group.id)
+      })
+
+      // Batch create all positions
+      const positionsToCreate: any[] = []
+      for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
+        const group = parsed.groups[gIdx]
+        const groupId = groupMap.get(group.name)
+        if (!groupId) continue
+
+        for (let pIdx = 0; pIdx < group.positions.length; pIdx++) {
+          const position = group.positions[pIdx]
+          positionsToCreate.push({
+            group_id: groupId,
+            title: position.title,
+            sort_order: pIdx,
           })
-          .select()
-          .single()
-
-        if (groupError || !groupRes) {
-          throw new Error(`Failed to create group: ${groupError?.message}`)
         }
+      }
 
-        const createdGroup = groupRes as Group
+      const { data: createdPositions, error: posError } = await supabase
+        .from('positions')
+        .insert(positionsToCreate)
+        .select('id, title, group_id')
 
-        // Create positions for this group
-        for (const position of group.positions) {
-          const { data: posRes, error: posError } = await supabase
-            .from('positions')
-            .insert({
-              group_id: createdGroup.id,
-              title: position.title,
-              sort_order: group.positions.indexOf(position),
-            })
-            .select()
-            .single()
+      if (posError || !createdPositions) {
+        throw new Error(`Failed to create positions: ${posError?.message}`)
+      }
 
-          if (posError || !posRes) {
-            throw new Error(`Failed to create position: ${posError?.message}`)
+      totalPositions = createdPositions.length
+
+      // Build position map: "GroupName:PositionTitle" -> id
+      const positionMap = new Map<string, string>()
+      let posIdx = 0
+      for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
+        const group = parsed.groups[gIdx]
+        for (let pIdx = 0; pIdx < group.positions.length; pIdx++) {
+          const position = group.positions[pIdx]
+          const createdPos = createdPositions[posIdx]
+          if (createdPos) {
+            positionMap.set(`${group.name}:${position.title}`, createdPos.id)
           }
+          posIdx++
+        }
+      }
 
-          const createdPosition = posRes as Position
-          totalPositions++
+      // Batch create all assignments
+      const assignmentsToCreate: any[] = []
+      for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
+        const group = parsed.groups[gIdx]
+        for (const position of group.positions) {
+          const positionId = positionMap.get(`${group.name}:${position.title}`)
+          if (!positionId) continue
 
-          // Create assignments for this position
           for (const calling of position.callings) {
             const memberId = memberMap.get(calling.memberName)
             if (!memberId) {
@@ -123,18 +158,22 @@ export function usePDFImport(wardId: string) {
               continue
             }
 
-            const { error: assignError } = await supabase
-              .from('position_assignments')
-              .insert({
-                position_id: createdPosition.id,
-                member_id: memberId,
-                called_date: calling.calledDate,
-              })
-
-            if (assignError) {
-              console.warn(`Failed to create assignment: ${assignError.message}`)
-            }
+            assignmentsToCreate.push({
+              position_id: positionId,
+              member_id: memberId,
+              called_date: calling.calledDate,
+            })
           }
+        }
+      }
+
+      if (assignmentsToCreate.length > 0) {
+        const { error: assignError } = await supabase
+          .from('position_assignments')
+          .insert(assignmentsToCreate)
+
+        if (assignError) {
+          console.warn(`Some assignments failed: ${assignError.message}`)
         }
       }
 
