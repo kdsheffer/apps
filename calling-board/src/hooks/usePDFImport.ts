@@ -211,11 +211,11 @@ export function usePDFImport(wardId: string) {
         memberCount: parsed.allMembers.size,
       }
     },
-    onSuccess: () => {
-      // Invalidate relevant queries
+    onSuccess: (data) => {
+      // Invalidate relevant queries - be specific about which board was imported
       queryClient.invalidateQueries({ queryKey: ['boards', wardId] })
       queryClient.invalidateQueries({ queryKey: ['drafts', wardId] })
-      queryClient.invalidateQueries({ queryKey: ['boardData'] })
+      queryClient.invalidateQueries({ queryKey: ['boardData', data.boardId] })
     },
   })
 }
