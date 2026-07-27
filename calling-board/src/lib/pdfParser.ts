@@ -114,6 +114,16 @@ export function parseCallingReport(text: string): ParsedBoard {
     { parent: 'Aaronic Priesthood Quorums', child: 'Teachers Quorum Adult Leaders' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Presidency' },
     { parent: 'Aaronic Priesthood Quorums', child: 'Deacons Quorum Adult Leaders' },
+    { parent: 'Elders Quorum', child: 'Elders Quorum Presidency' },
+    { parent: 'Elders Quorum', child: 'Teachers Elders Quorum' },
+    { parent: 'Elders Quorum', child: 'Ministering Elders Quorum' },
+    { parent: 'Elders Quorum', child: 'Activities Elders Quorum' },
+    { parent: 'Elders Quorum', child: 'Service Elders Quorum' },
+    { parent: 'Relief Society', child: 'Relief Society Presidency' },
+    { parent: 'Relief Society', child: 'Teachers Relief Society' },
+    { parent: 'Relief Society', child: 'Ministering Relief Society' },
+    { parent: 'Relief Society', child: 'Activities Relief Society' },
+    { parent: 'Relief Society', child: 'Service Relief Society' },
   ]
 
   // Remove header rows and normalize spacing
@@ -169,14 +179,19 @@ export function parseCallingReport(text: string): ParsedBoard {
     for (const pattern of subgroupPatterns) {
       if (positionName.includes(pattern.child)) {
         positionName = positionName.replace(pattern.child, '').trim()
+        // Also strip common suffixes that appear with subgroup names
+        positionName = positionName.replace(/Presidency|Presidents|Leaders/, '').trim()
         break
       }
     }
 
-    // Clean up position name (remove common junk)
+    // Clean up position name (remove common junk and extract just the role)
     positionName = positionName
       .replace(/Calling$/i, '')
       .replace(/^Set Apart$/, '')
+      // Extract just the role portion (e.g., "Elders Quorum President" -> "President")
+      .replace(/^[A-Z][a-z]+\s+Quorum\s+/, '')
+      .replace(/^[A-Z][a-z]+\s+/, '')
       .trim()
 
     // Skip if no position or invalid
