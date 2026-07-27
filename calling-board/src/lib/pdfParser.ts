@@ -33,12 +33,21 @@ export async function extractTextFromPDF(file: File): Promise<string> {
     const data = await file.arrayBuffer()
     console.log('[PDF] Array buffer created, size:', data.byteLength)
 
-    // Try to use worker, but with a timeout
+    // Set worker from reliable CDN
     try {
       // @ts-ignore
-      GlobalWorkerOptions.workerSrc = undefined
+      GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${version}/build/pdf.worker.min.js`
+      console.log('[PDF] Worker configured from CDN')
     } catch (e) {
-      console.warn('[PDF] Could not disable worker:', e)
+      console.warn('[PDF] Could not set worker:', e)
+      // Try alternative worker URL
+      try {
+        // @ts-ignore
+        GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.js`
+        console.log('[PDF] Worker configured from unpkg CDN')
+      } catch (e2) {
+        console.error('[PDF] Failed to set worker from any CDN:', e2)
+      }
     }
 
     // Add timeout wrapper around PDF loading
