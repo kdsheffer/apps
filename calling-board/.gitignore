@@ -17,6 +17,12 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Member data. LCR exports carry names, birth dates, phone numbers and email
+# addresses for the whole ward, including minors. They're uploaded by the user
+# and parsed in the browser at import time — never committed, and never placed
+# in public/, which ships verbatim to the deployed site with no authentication.
+*.pdf
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
