@@ -6,3 +6,35 @@ body {
   margin: 0;
   font-family: system-ui, -apple-system, sans-serif;
 }
+
+/* Printing is for taking the board into ward council: drop the app chrome,
+   flatten the cards, and keep a calling from splitting across pages. */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .print\:break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* The Assign tab caps its panes to the viewport and scrolls them separately,
+     which on paper would clip everything below the fold. */
+  [data-assign-panes] {
+    height: auto !important;
+  }
+
+  [data-assign-scroll] {
+    overflow: visible !important;
+  }
+}
+
+@page {
+  margin: 1.5cm;
+}

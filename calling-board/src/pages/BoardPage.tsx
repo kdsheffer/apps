@@ -1,84 +1,332 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core'
 import { useAuth } from '../hooks/useAuth'
 import { useBoard } from '../hooks/useBoard'
 import { useBoardData } from '../hooks/useBoardData'
-import { useBoardMutations } from '../hooks/useBoardMutations'
+import { useBoardActions } from '../hooks/useBoardActions'
 import { useBoardVersioning } from '../hooks/useBoardVersioning'
+import { useBoardSelection } from '../hooks/useBoardSelection'
 import { useRealtimeSync } from '../hooks/useRealtimeSync'
 import { usePresence } from '../hooks/usePresence'
-import { formatTimeInCalling } from '../lib/timeInCalling'
+import {
+  boardStats,
+  buildGroupTree,
+  buildIndex,
+  unassignedMembers,
+} from '../lib/boardSelectors'
+import { buildAssignMenu } from '../lib/buildAssignMenu'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { BoardVersioning } from '../components/BoardVersioning'
 import { ActiveUsers } from '../components/ActiveUsers'
 import { PDFUpload } from '../components/PDFUpload'
-import type { Group, Position, Member } from '../types'
+import { Tabs } from '../components/Tabs'
+import { FilterBar } from '../components/FilterBar'
+import { Toast } from '../components/Toast'
+import { ContextMenu, type ContextMenuState, type MenuItem } from '../components/ContextMenu'
+import { BoardTab } from '../components/tabs/BoardTab'
+import { AssignTab } from '../components/tabs/AssignTab'
+import { MembersTab } from '../components/tabs/MembersTab'
+import { BoardsTab } from '../components/tabs/BoardsTab'
+import type { BoardViewContext, ConfirmRequest } from '../components/tabs/shared'
+import type { DragData, DropData } from '../lib/dnd'
+import { emptyFilters, type BoardFilters, type Member, type Position } from '../types'
+
+type TabId = 'board' | 'assign' | 'members' | 'boards'
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform)
+const modifierKey = isMac ? '⌘' : 'Ctrl+'
+
+/** Typing in a field owns its own undo — don't steal the shortcut from it. */
+function isTextEntry(target: EventTarget | null) {
+  const el = target as HTMLElement | null
+  if (!el) return false
+  return (
+    el.isContentEditable ||
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+  )
+}
 
 export function BoardPage() {
-  const { wardId } = useParams<{ wardId: string }>()
+  const { wardId = '' } = useParams<{ wardId: string }>()
   const navigate = useNavigate()
   const { signOut } = useAuth()
-  const { data: board, isLoading: boardLoading, error: boardError } = useBoard(wardId || '')
-  const { isLoading: dataLoading } = useBoardData(board?.id)
-  const versioning = useBoardVersioning(wardId || '')
 
-  const [currentBoardId, setCurrentBoardId] = useState<string | null>(null)
+  const { data: liveBoard, isLoading: boardLoading, error: boardError } = useBoard(wardId)
+  const versioning = useBoardVersioning(wardId)
 
-  // A ward can have drafts before anything is promoted — a freshly imported ward
-  // is exactly that — so fall back to the newest board of any status.
-  const newestBoard = versioning.allBoards.data?.[0] ?? null
-  const editingBoardId = currentBoardId || board?.id || newestBoard?.id || ''
+  const [tab, setTab] = useState<TabId>('board')
+  const [filters, setFilters] = useState<BoardFilters>(emptyFilters)
+  const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [dragging, setDragging] = useState<DragData | null>(null)
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
 
-  // Enable realtime sync for the editing board
-  useRealtimeSync(editingBoardId)
+  const boards = versioning.allBoards.data
+  const workingDraft = boards?.find((b) => b.is_working_draft) ?? null
 
-  // Track active users viewing this board
-  const { activeUsers } = usePresence(editingBoardId)
-  const mutations = useBoardMutations(editingBoardId)
-  const { data: editingBoardData, isLoading: editingDataLoading } = useBoardData(editingBoardId)
+  // The board you last loaded wins, and survives refreshes. It falls back to the
+  // working draft, then the live board, then whatever exists — that's the path a
+  // ward takes before anything has been loaded by hand, and after the remembered
+  // board has been promoted away or deleted.
+  const { selected: selectedBoardId, select: setSelectedBoardId } = useBoardSelection(
+    wardId,
+    boards
+  )
+  const defaultBoardId = workingDraft?.id || liveBoard?.id || boards?.[0]?.id || ''
+  const boardId = selectedBoardId || defaultBoardId
 
-  const [newGroupName, setNewGroupName] = useState('')
-  const [editingGroup, setEditingGroup] = useState<{ id: string; name: string } | null>(null)
-  const [editingPosition, setEditingPosition] = useState<{ id: string; title: string } | null>(null)
-  const [editingAssignmentDate, setEditingAssignmentDate] = useState<{
-    id: string
-    date: string
-  } | null>(null)
-  const [newMemberName, setNewMemberName] = useState('')
+  useRealtimeSync(boardId)
+  const { activeUsers } = usePresence(boardId)
 
-  const [confirmDialog, setConfirmDialog] = useState<{
-    isOpen: boolean
-    title: string
-    message: string
-    action: (() => Promise<void>) | null
-  }>({
-    isOpen: false,
-    title: '',
-    message: '',
-    action: null,
+  const { data, isLoading: dataLoading } = useBoardData(boardId || undefined, wardId)
+  const board = boards?.find((b) => b.id === boardId) ?? null
+
+  const index = useMemo(() => buildIndex(data), [data])
+  const tree = useMemo(() => buildGroupTree(data, index, filters), [data, index, filters])
+  const stats = useMemo(() => boardStats(data, index), [data, index])
+
+  const actions = useBoardActions({
+    wardId,
+    boardId,
+    board,
+    index,
+    onSwitchBoard: setSelectedBoardId,
   })
 
-  if (!wardId) {
-    return <div className="text-center py-8">Ward not found</div>
+  const servingElsewhere = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const [memberId, assignments] of index.byMember) {
+      const titles = assignments
+        .map((a) => index.positionsById.get(a.position_id)?.title)
+        .filter((t): t is string => !!t)
+      if (titles.length > 0) map.set(memberId, titles)
+    }
+    return map
+  }, [index])
+
+  const visibleMembers = useMemo(
+    () => (data?.members || []).filter((m) => filters.showInactive || !m.archived_at),
+    [data, filters.showInactive]
+  )
+
+  const unassigned = useMemo(
+    () =>
+      unassignedMembers(data, index).filter((m) => filters.showInactive || !m.archived_at),
+    [data, index, filters.showInactive]
+  )
+
+  // Loading a different version by hand leaves the history pointing at rows on
+  // the board you just left, so it starts over. The automatic redirect into a
+  // working draft deliberately doesn't clear it — undoing the edit that caused
+  // the fork is exactly what you'd reach for.
+  const loadBoard = useCallback(
+    (id: string) => {
+      actions.history.clear()
+      setSelectedBoardId(id)
+    },
+    [actions.history, setSelectedBoardId]
+  )
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return
+      if (isTextEntry(event.target)) return
+
+      event.preventDefault()
+      if (event.shiftKey) actions.redo()
+      else actions.undo()
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [actions])
+
+  const sensors = useSensors(
+    // A small threshold keeps clicks on the chip's buttons working.
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+  )
+
+  // --- Context menus --------------------------------------------------------
+
+  const openMemberMenu = (event: React.MouseEvent, member: Member, assignmentId?: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const currentTitle = assignmentId
+      ? index.positionsById.get(
+          (index.byMember.get(member.id) || []).find((a) => a.id === assignmentId)?.position_id ||
+            ''
+        )?.title
+      : undefined
+
+    const items: MenuItem[] = [
+      {
+        kind: 'action',
+        icon: '★',
+        label: member.flagged ? 'Remove flag' : 'Flag this person',
+        onSelect: () => actions.toggleMemberFlag(member),
+      },
+    ]
+
+    if (!actions.editor.isReadOnly) {
+      items.push({ kind: 'separator' })
+      items.push(
+        buildAssignMenu({
+          tree,
+          index,
+          memberId: member.id,
+          memberName: member.full_name,
+          onAssign: (positionId, action) => actions.assign(positionId, member.id, action),
+        })
+      )
+
+      if (assignmentId) {
+        items.push({
+          kind: 'action',
+          icon: '−',
+          label: currentTitle ? `Release from ${currentTitle}` : 'Release from this calling',
+          danger: true,
+          onSelect: () => actions.unassign(assignmentId),
+        })
+      }
+    }
+
+    items.push({ kind: 'separator' })
+    items.push({
+      kind: 'action',
+      icon: member.archived_at ? '↺' : '⊘',
+      label: member.archived_at ? 'Mark active' : 'Mark inactive',
+      onSelect: () => actions.toggleMemberActive(member),
+    })
+
+    setMenu({ x: event.clientX, y: event.clientY, title: member.full_name, items })
   }
 
-  if (boardLoading || dataLoading || editingDataLoading) {
+  const openPositionMenu = (
+    event: React.MouseEvent,
+    position: Position,
+    handlers?: { onRename?: () => void }
+  ) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const occupants = index.byPosition.get(position.id) || []
+
+    const items: MenuItem[] = [
+      {
+        kind: 'action',
+        icon: '★',
+        label: position.flagged ? 'Remove flag' : 'Flag this calling',
+        onSelect: () => actions.togglePositionFlag(position),
+      },
+      {
+        kind: 'action',
+        icon: position.inactive_at ? '↺' : '⊘',
+        label: position.inactive_at ? 'Mark active' : 'Mark inactive',
+        disabled: actions.editor.isReadOnly,
+        onSelect: () => actions.togglePositionActive(position),
+      },
+    ]
+
+    if (handlers?.onRename && !actions.editor.isReadOnly) {
+      items.push({
+        kind: 'action',
+        icon: '✎',
+        label: 'Rename calling',
+        onSelect: handlers.onRename,
+      })
+    }
+
+    if (occupants.length > 0 && !actions.editor.isReadOnly) {
+      items.push({ kind: 'separator' })
+      items.push({ kind: 'header', label: 'Currently serving' })
+      for (const { member, assignment } of occupants) {
+        if (!member) continue
+        items.push({
+          kind: 'action',
+          icon: '−',
+          label: `Release ${member.full_name}`,
+          danger: true,
+          onSelect: () => actions.unassign(assignment.id),
+        })
+      }
+    }
+
+    if (!actions.editor.isReadOnly) {
+      items.push({ kind: 'separator' })
+      items.push({
+        kind: 'action',
+        icon: '🗑',
+        label: 'Delete calling',
+        danger: true,
+        onSelect: () =>
+          setConfirmRequest({
+            title: `Delete ${position.title}?`,
+            message: 'The calling and its assignments will be removed. This cannot be undone.',
+            confirmLabel: 'Delete',
+            onConfirm: () => actions.deletePosition(position.id),
+          }),
+      })
+    }
+
+    setMenu({ x: event.clientX, y: event.clientY, title: position.title, items })
+  }
+
+  // --- Drag and drop --------------------------------------------------------
+
+  const onDragStart = (event: DragStartEvent) => {
+    setDragging((event.active.data.current as DragData) ?? null)
+  }
+
+  const onDragEnd = (event: DragEndEvent) => {
+    setDragging(null)
+    const drag = event.active.data.current as DragData | undefined
+    const drop = event.over?.data.current as DropData | undefined
+    if (!drag || !drop) return
+
+    if (drop.type === 'position') {
+      if (drag.type === 'assignment') {
+        if (drag.positionId === drop.positionId) return
+        actions.moveAssignment(drag.assignmentId, drop.positionId, drag.memberId)
+      } else {
+        actions.assign(drop.positionId, drag.memberId, 'add')
+      }
+      return
+    }
+
+    if (drop.type === 'unassigned' && drag.type === 'assignment') {
+      actions.unassign(drag.assignmentId)
+    }
+  }
+
+  // --- Guards ---------------------------------------------------------------
+
+  if (!wardId) return <div className="py-8 text-center">Ward not found</div>
+
+  if (boardLoading || versioning.allBoards.isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-600">Loading board...</div>
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="text-gray-600">Loading board…</div>
       </div>
     )
   }
 
   if (boardError) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
         <div className="text-center">
-          <p className="text-gray-600 mb-4">Couldn't load this ward's board.</p>
-          <p className="text-sm text-gray-500 mb-4">{boardError.message}</p>
+          <p className="mb-4 text-gray-600">Couldn't load this ward's board.</p>
+          <p className="mb-4 text-sm text-gray-500">{boardError.message}</p>
           <button
             onClick={() => navigate('/wards')}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-medium"
+            className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
           >
             Back to Wards
           </button>
@@ -87,636 +335,236 @@ export function BoardPage() {
     )
   }
 
-  // Nothing has been created for this ward yet — a new ward, or one that's been
-  // wiped. Offer the import rather than dead-ending, since that's the way in.
-  if (!editingBoardId) {
+  const header = (
+    <header className="bg-white shadow print:hidden">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <p className="text-sm text-gray-600">{board?.name || liveBoard?.name}</p>
+            {board?.status === 'promoted' && (
+              <span className="rounded bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                Live · read-only
+              </span>
+            )}
+            {board?.status === 'draft' && (
+              <span className="rounded bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800">
+                {board.is_working_draft ? 'Working draft' : 'Draft'}
+              </span>
+            )}
+            {board?.status === 'archived' && (
+              <span className="rounded bg-gray-200 px-2 py-1 text-xs font-medium text-gray-600">
+                Archived · read-only
+              </span>
+            )}
+            {activeUsers.length > 0 && <ActiveUsers activeUsers={activeUsers} />}
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button
+            onClick={actions.undo}
+            disabled={!actions.history.canUndo || actions.history.busy}
+            title={
+              actions.history.undoLabel
+                ? `Undo ${actions.history.undoLabel} (${modifierKey}Z)`
+                : 'Nothing to undo'
+            }
+            className="rounded bg-gray-200 px-3 py-2 font-medium text-gray-700 hover:bg-gray-300 disabled:opacity-40"
+          >
+            ↶
+          </button>
+          <button
+            onClick={actions.redo}
+            disabled={!actions.history.canRedo || actions.history.busy}
+            title={
+              actions.history.redoLabel
+                ? `Redo ${actions.history.redoLabel} (${modifierKey}⇧Z)`
+                : 'Nothing to redo'
+            }
+            className="rounded bg-gray-200 px-3 py-2 font-medium text-gray-700 hover:bg-gray-300 disabled:opacity-40"
+          >
+            ↷
+          </button>
+          <button
+            onClick={() => window.print()}
+            className="flex-1 rounded bg-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-300 sm:flex-none"
+          >
+            Print
+          </button>
+          <button
+            onClick={() => navigate('/wards')}
+            className="flex-1 rounded bg-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-300 sm:flex-none"
+          >
+            Wards
+          </button>
+          <button
+            onClick={signOut}
+            className="flex-1 rounded bg-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-300 sm:flex-none"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </header>
+  )
+
+  // Nothing exists for this ward yet — offer the import rather than dead-ending.
+  if (!boardId) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <header className="bg-white shadow">
-          <div className="max-w-3xl mx-auto py-4 px-4 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
-            <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
-            <div className="flex gap-2 shrink-0">
-              <button
-                onClick={() => navigate('/wards')}
-                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
-              >
-                Back to Wards
-              </button>
-              <button
-                onClick={signOut}
-                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <main className="max-w-3xl mx-auto py-6 px-4 sm:py-12 space-y-6">
-          <div className="bg-white rounded-lg shadow p-8 text-center">
+        {header}
+        <main className="mx-auto max-w-3xl space-y-6 px-4 py-6 sm:py-12">
+          <div className="rounded-lg bg-white p-8 text-center shadow">
             <h2 className="text-lg font-semibold text-gray-900">No board yet</h2>
             <p className="mt-2 text-sm text-gray-600">
               Import the "Organizations and Callings" report from LCR to build this ward's first
               board. It comes in as a draft you can review before promoting it.
             </p>
           </div>
-
-          <PDFUpload wardId={wardId} onSuccess={(boardId) => setCurrentBoardId(boardId)} />
+          <PDFUpload wardId={wardId} onSuccess={loadBoard} />
         </main>
       </div>
     )
   }
 
-  const positionsIn = (groupId: string) =>
-    (editingBoardData?.positions || []).filter((p) => p.group_id === groupId)
-
-  // Organizations own their subgroups, so render them as a tree rather than a
-  // flat list. An organization may hold only subgroups and no callings itself.
-  const groupTree = (editingBoardData?.groups || [])
-    .filter((group) => !group.parent_id)
-    .map((group) => ({
-      group,
-      positions: positionsIn(group.id),
-      subgroups: (editingBoardData?.groups || [])
-        .filter((candidate) => candidate.parent_id === group.id)
-        .map((subgroup) => ({ group: subgroup, positions: positionsIn(subgroup.id) })),
-    }))
-
-  const getMembersForPosition = (positionId: string) => {
-    const assignments = editingBoardData?.assignments.filter((a) => a.position_id === positionId) || []
-    return assignments.map((a) => {
-      const member = editingBoardData?.members.find((m) => m.id === a.member_id)
-      return { member, assignment: a }
-    })
+  const ctx: BoardViewContext = {
+    wardId,
+    data,
+    index,
+    tree,
+    actions,
+    filters,
+    servingElsewhere,
+    visibleMembers,
+    unassigned,
+    readOnly: actions.editor.isReadOnly,
+    openMemberMenu,
+    openPositionMenu,
+    confirm: setConfirmRequest,
   }
 
-  const handleAddGroup = async () => {
-    if (!newGroupName.trim()) return
-    await mutations.addGroup.mutateAsync(newGroupName)
-    setNewGroupName('')
-  }
-
-  const handleRenameGroup = async () => {
-    if (!editingGroup) return
-    await mutations.renameGroup.mutateAsync({
-      groupId: editingGroup.id,
-      name: editingGroup.name,
-    })
-    setEditingGroup(null)
-  }
-
-  const handleDeleteGroup = (group: Group) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: `Delete ${group.name}?`,
-      message: `This will delete the group and all its positions. This cannot be undone.`,
-      action: () => mutations.deleteGroup.mutateAsync(group.id),
-    })
-  }
-
-  const handleAddPosition = async (groupId: string, title: string) => {
-    if (!title.trim()) return
-    await mutations.addPosition.mutateAsync({ groupId, title })
-  }
-
-  const handleRenamePosition = async () => {
-    if (!editingPosition) return
-    await mutations.renamePosition.mutateAsync({
-      positionId: editingPosition.id,
-      title: editingPosition.title,
-    })
-    setEditingPosition(null)
-  }
-
-  const handleDeletePosition = (position: Position) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: `Delete ${position.title}?`,
-      message: 'This will delete the position and all its assignments. This cannot be undone.',
-      action: () => mutations.deletePosition.mutateAsync(position.id),
-    })
-  }
-
-  const handleAddMember = async () => {
-    if (!newMemberName.trim()) return
-    await mutations.addMember.mutateAsync({ wardId, full_name: newMemberName })
-    setNewMemberName('')
-  }
-
-  const handleArchiveMember = (member: Member) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: `Archive ${member.full_name}?`,
-      message: 'They can be reinstated later. Their assignments will remain.',
-      action: () => mutations.archiveMember.mutateAsync(member.id),
-    })
-  }
-
-  const handleUnassign = (assignmentId: string) => {
-    mutations.deleteAssignment.mutate(assignmentId)
-  }
-
-  const handleUpdateAssignmentDate = async () => {
-    if (!editingAssignmentDate) return
-    await mutations.updateAssignmentDate.mutateAsync({
-      assignmentId: editingAssignmentDate.id,
-      calledDate: editingAssignmentDate.date,
-    })
-    setEditingAssignmentDate(null)
-  }
-
-  const activeMembers = (editingBoardData?.members || []).filter((m) => !m.archived_at)
-
-  const editingBoard = versioning.allBoards.data?.find((b) => b.id === editingBoardId)
-
-  const renderPositionCard = (position: Position) => {
-    const members = getMembersForPosition(position.id)
-    const isOpen = members.length === 0
-
-    return (
-      <div
-        key={position.id}
-        className="border border-gray-200 rounded-lg p-4 bg-gray-50"
-      >
-        {/* Position header */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex-1">
-            {editingPosition?.id === position.id ? (
-              <div className="flex flex-col gap-2">
-                <input
-                  autoFocus
-                  type="text"
-                  value={editingPosition.title}
-                  onChange={(e) =>
-                    setEditingPosition({
-                      ...editingPosition,
-                      title: e.target.value,
-                    })
-                  }
-                  className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleRenamePosition}
-                    className="px-2 py-1 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => setEditingPosition(null)}
-                    className="px-2 py-1 text-sm bg-gray-300 hover:bg-gray-400 text-gray-700 rounded"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <h3 className="font-semibold text-gray-900">{position.title}</h3>
-            )}
-          </div>
-          {!editingPosition?.id && (
-            <div className="flex gap-1 ml-2">
-              <button
-                onClick={() =>
-                  setEditingPosition({ id: position.id, title: position.title })
-                }
-                className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-              >
-                Rename
-              </button>
-              <button
-                onClick={() => handleDeletePosition(position)}
-                className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded"
-              >
-                Delete
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Members in position */}
-        {isOpen ? (
-          <div className="text-center py-6 text-gray-500 mb-3">
-            <p className="text-sm">Open Calling</p>
-          </div>
-        ) : (
-          <div className="space-y-2 mb-3">
-            {members.map(({ member, assignment }) => (
-              <div
-                key={assignment.id}
-                className="bg-white rounded p-3 border border-blue-200 shadow-sm"
-              >
-                <p className="font-medium text-gray-900">{member?.full_name}</p>
-                {editingAssignmentDate?.id === assignment.id ? (
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="date"
-                      value={editingAssignmentDate.date}
-                      onChange={(e) =>
-                        setEditingAssignmentDate({
-                          ...editingAssignmentDate,
-                          date: e.target.value,
-                        })
-                      }
-                      className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <button
-                      onClick={handleUpdateAssignmentDate}
-                      className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={() => setEditingAssignmentDate(null)}
-                      className="px-2 py-1 text-xs bg-gray-300 hover:bg-gray-400 text-gray-700 rounded"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <div className="mt-2 flex items-center justify-between">
-                    <p
-                      className="text-xs text-gray-500 cursor-pointer hover:text-blue-600"
-                      onClick={() =>
-                        setEditingAssignmentDate({
-                          id: assignment.id,
-                          date: assignment.called_date,
-                        })
-                      }
-                    >
-                      {formatTimeInCalling(assignment.called_date)}
-                    </p>
-                    <button
-                      onClick={() => handleUnassign(assignment.id)}
-                      className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-                    >
-                      Unassign
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add member to position */}
-        <div className="border-t border-gray-200 pt-3">
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value) {
-                mutations.createAssignment.mutate({
-                  positionId: position.id,
-                  memberId: e.target.value,
-                  calledDate: new Date().toISOString().split('T')[0],
-                })
-                e.target.value = ''
-              }
-            }}
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="">+ Assign member</option>
-            {activeMembers.map((member) => (
-              <option key={member.id} value={member.id}>
-                {member.full_name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-    )
-  }
+  const topLevelGroups = (data?.groups || []).filter((g) => !g.parent_id)
+  const subgroupOptions = (data?.groups || []).filter(
+    (g) =>
+      !!g.parent_id &&
+      (filters.groupIds.length === 0 || filters.groupIds.includes(g.parent_id))
+  )
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow">
-        <div className="max-w-7xl mx-auto py-4 px-4 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold text-gray-900">Calling Board</h1>
-            <div className="mt-1 space-y-2">
-              <div className="flex items-center gap-3">
-                <p className="text-sm text-gray-600">{editingBoard?.name || board?.name}</p>
-                {editingBoard?.status === 'draft' && (
-                  <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                    Draft
-                  </span>
-                )}
-                {editingBoard?.status === 'promoted' && (
-                  <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
-                    Live
-                  </span>
-                )}
-              </div>
-              {activeUsers.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <ActiveUsers activeUsers={activeUsers} />
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="flex gap-2 shrink-0">
-            <button
-              onClick={() => navigate('/wards')}
-              className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
-            >
-              Back to Wards
-            </button>
-            <button
-              onClick={signOut}
-              className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-medium sm:flex-none"
-            >
-              Sign Out
-            </button>
-          </div>
-        </div>
-      </header>
+    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <div className="min-h-screen bg-gray-50">
+        {header}
 
-      <main className="max-w-7xl mx-auto py-6 px-4 sm:py-12">
-        <div className="space-y-8">
-          {/* Board Versioning */}
-          <BoardVersioning
-            wardId={wardId || ''}
-            currentBoardId={editingBoardId}
-            onSwitchBoard={setCurrentBoardId}
+        <main className="mx-auto max-w-7xl px-4 py-4 sm:py-6">
+          <div className="mb-4 flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-600 print:mb-2">
+            <span>
+              <strong className="text-gray-900">{stats.callings}</strong> callings
+            </span>
+            <span>
+              <strong className="text-gray-900">{stats.open}</strong> open
+            </span>
+            <span>
+              <strong className="text-gray-900">{stats.flagged}</strong> flagged
+            </span>
+            <span>
+              <strong className="text-gray-900">{stats.members}</strong> members ·{' '}
+              {stats.unassigned} unassigned
+            </span>
+            {stats.inactive > 0 && <span>{stats.inactive} inactive</span>}
+          </div>
+
+          <Tabs
+            tabs={[
+              { id: 'board', label: 'Board' },
+              { id: 'assign', label: 'Assign', badge: stats.open },
+              { id: 'members', label: 'Members', badge: stats.members },
+              { id: 'boards', label: 'Boards' },
+            ]}
+            active={tab}
+            onChange={setTab}
           />
 
-          {/* PDF Import */}
-          <PDFUpload wardId={wardId || ''} onSuccess={(boardId) => setCurrentBoardId(boardId)} />
+          <div className="pt-4">
+            {tab !== 'boards' && (
+              <FilterBar
+                filters={filters}
+                onChange={setFilters}
+                groups={topLevelGroups}
+                subgroups={subgroupOptions}
+                openToggle={
+                  tab === 'board'
+                    ? { label: 'Open only', title: 'Show only callings with nobody in them' }
+                    : tab === 'members'
+                      ? { label: 'No calling', title: 'Show only members who hold no calling' }
+                      : undefined
+                }
+                showFlaggedToggle={tab !== 'assign'}
+              />
+            )}
 
-          {/* Groups */}
-          {groupTree.length === 0 && (
-            <div className="bg-white rounded-lg shadow p-8 text-center">
-              <h2 className="text-lg font-semibold text-gray-900">This board is empty</h2>
-              <p className="mt-2 text-sm text-gray-600">
-                Import an LCR "Organizations and Callings" PDF above to fill it in, or add an
-                organization by hand below.
-              </p>
+            {dataLoading ? (
+              <p className="py-12 text-center text-gray-500">Loading…</p>
+            ) : (
+              <>
+                {tab === 'board' && <BoardTab ctx={ctx} boardId={boardId} />}
+                {tab === 'assign' && <AssignTab ctx={ctx} />}
+                {tab === 'members' && <MembersTab ctx={ctx} />}
+                {tab === 'boards' && (
+                  <BoardsTab
+                    wardId={wardId}
+                    currentBoardId={boardId}
+                    onLoadBoard={loadBoard}
+                    confirm={setConfirmRequest}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </main>
+
+        <DragOverlay dropAnimation={null}>
+          {dragging && (
+            <div className="rounded border border-blue-400 bg-white px-3 py-2 text-sm font-medium text-gray-900 shadow-lg">
+              {dragging.name}
             </div>
           )}
+        </DragOverlay>
 
-          {groupTree.map(({ group, positions, subgroups }) => (
-            <div key={group.id} className="bg-white rounded-lg shadow p-6">
-              {/* Group header */}
-              <div className="flex flex-col gap-2 mb-6 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex-1">
-                  {editingGroup?.id === group.id ? (
-                    <div className="flex gap-2">
-                      <input
-                        autoFocus
-                        type="text"
-                        value={editingGroup.name}
-                        onChange={(e) =>
-                          setEditingGroup({ ...editingGroup, name: e.target.value })
-                        }
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <button
-                        onClick={handleRenameGroup}
-                        className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
-                      >
-                        Save
-                      </button>
-                      <button
-                        onClick={() => setEditingGroup(null)}
-                        className="px-3 py-2 bg-gray-300 hover:bg-gray-400 text-gray-700 rounded font-medium"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <h2 className="text-xl font-semibold text-gray-900">{group.name}</h2>
-                  )}
-                </div>
-                {!editingGroup?.id && (
-                  <div className="flex gap-2 sm:ml-4">
-                    <button
-                      onClick={() => setEditingGroup({ id: group.id, name: group.name })}
-                      className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-                    >
-                      Rename
-                    </button>
-                    <button
-                      onClick={() => handleDeleteGroup(group)}
-                      className="px-3 py-1 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </div>
+        <ContextMenu state={menu} onClose={() => setMenu(null)} />
 
-              {/* Subgroups */}
-              {subgroups.map((subgroup) => (
-                <section key={subgroup.group.id} className="mb-6 border-l-4 border-blue-100 pl-4">
-                  <div className="flex flex-col gap-2 mb-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex-1">
-                      {editingGroup?.id === subgroup.group.id ? (
-                        <div className="flex gap-2">
-                          <input
-                            autoFocus
-                            type="text"
-                            value={editingGroup.name}
-                            onChange={(e) =>
-                              setEditingGroup({ ...editingGroup, name: e.target.value })
-                            }
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          />
-                          <button
-                            onClick={handleRenameGroup}
-                            className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={() => setEditingGroup(null)}
-                            className="px-3 py-2 bg-gray-300 hover:bg-gray-400 text-gray-700 rounded font-medium"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <h3 className="text-lg font-medium text-gray-700">
-                          {subgroup.group.name}
-                        </h3>
-                      )}
-                    </div>
-                    {!editingGroup?.id && (
-                      <div className="flex gap-2 sm:ml-4">
-                        <button
-                          onClick={() =>
-                            setEditingGroup({
-                              id: subgroup.group.id,
-                              name: subgroup.group.name,
-                            })
-                          }
-                          className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded"
-                        >
-                          Rename
-                        </button>
-                        <button
-                          onClick={() => handleDeleteGroup(subgroup.group)}
-                          className="px-3 py-1 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
+        <ConfirmDialog
+          isOpen={!!confirmRequest}
+          title={confirmRequest?.title || ''}
+          message={confirmRequest?.message || ''}
+          confirmLabel={confirmRequest?.confirmLabel}
+          isDangerous
+          onConfirm={async () => {
+            await confirmRequest?.onConfirm()
+            setConfirmRequest(null)
+          }}
+          onCancel={() => setConfirmRequest(null)}
+        />
 
-                  {subgroup.positions.length === 0 ? (
-                    <p className="mb-4 text-sm text-gray-500">No callings in this subgroup yet.</p>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-4">
-                      {subgroup.positions.map(renderPositionCard)}
-                    </div>
-                  )}
+        {actions.error && (
+          <Toast tone="error" onDismiss={actions.clearError}>
+            {actions.error}
+          </Toast>
+        )}
 
-                  <input
-                    type="text"
-                    placeholder="New position name..."
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleAddPosition(subgroup.group.id, e.currentTarget.value)
-                        e.currentTarget.value = ''
-                      }
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </section>
-              ))}
+        {!actions.error && actions.editor.lastForkedTo && (
+          <Toast
+            onDismiss={actions.editor.dismissForkNotice}
+            action={{ label: 'Board versions', onClick: () => setTab('boards') }}
+          >
+            The live board is read-only, so your change went into the working draft. You're editing
+            it now — promote it when you're ready.
+          </Toast>
+        )}
 
-              {/* Positions grid */}
-              {positions.length === 0 ? (
-                subgroups.length === 0 && (
-                  <p className="mb-6 text-sm text-gray-500">
-                    No callings here yet. Add one below.
-                  </p>
-                )
-              ) : (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 mb-6">
-                  {positions.map(renderPositionCard)}
-                </div>
-              )}
-
-              {/* Add position to group */}
-              <div className="border-t border-gray-200 pt-4">
-                <input
-                  type="text"
-                  placeholder="New position name..."
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      handleAddPosition(group.id, e.currentTarget.value)
-                      e.currentTarget.value = ''
-                    }
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-          ))}
-
-          {/* Add group section */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Add New Group</h3>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Group name..."
-                value={newGroupName}
-                onChange={(e) => setNewGroupName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleAddGroup()
-                  }
-                }}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                onClick={handleAddGroup}
-                disabled={mutations.addGroup.isPending}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium disabled:opacity-50"
-              >
-                Add Group
-              </button>
-            </div>
-          </div>
-
-          {/* Members management */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="font-semibold text-gray-900 mb-4">Members</h3>
-
-            <div className="mb-6">
-              <div className="flex gap-2 mb-4">
-                <input
-                  type="text"
-                  placeholder="New member name..."
-                  value={newMemberName}
-                  onChange={(e) => setNewMemberName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      handleAddMember()
-                    }
-                  }}
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <button
-                  onClick={handleAddMember}
-                  disabled={mutations.addMember.isPending}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium disabled:opacity-50"
-                >
-                  Add Member
-                </button>
-              </div>
-
-              {activeMembers.length === 0 && (
-                <p className="text-sm text-gray-500">
-                  No members yet. Add them above, or import an LCR PDF to bring them in with their
-                  callings.
-                </p>
-              )}
-
-              <div className="space-y-2">
-                {activeMembers.map((member) => (
-                  <div
-                    key={member.id}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded border border-gray-200"
-                  >
-                    <span className="font-medium text-gray-900">{member.full_name}</span>
-                    <button
-                      onClick={() => handleArchiveMember(member)}
-                      className="px-3 py-1 text-sm bg-red-100 hover:bg-red-200 text-red-700 rounded"
-                    >
-                      Archive
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </main>
-
-      <ConfirmDialog
-        isOpen={confirmDialog.isOpen}
-        title={confirmDialog.title}
-        message={confirmDialog.message}
-        isDangerous
-        isLoading={
-          mutations.deleteGroup.isPending ||
-          mutations.deletePosition.isPending ||
-          mutations.archiveMember.isPending
-        }
-        onConfirm={async () => {
-          if (confirmDialog.action) {
-            await confirmDialog.action()
-            setConfirmDialog({ isOpen: false, title: '', message: '', action: null })
-          }
-        }}
-        onCancel={() =>
-          setConfirmDialog({ isOpen: false, title: '', message: '', action: null })
-        }
-      />
-    </div>
+        {actions.editor.forking && (
+          <Toast onDismiss={() => {}}>Creating a working draft from the live board…</Toast>
+        )}
+      </div>
+    </DndContext>
   )
 }
