@@ -11,7 +11,9 @@
  *   x=54, height  8   roster table header      "Name | Age | Birth Date | ..."
  *   x=34, height  8   "Count: N" — ends the current table
  *
- * Sections whose header ends in "Members" are membership rosters, not callings.
+ * Sections whose header ends in "Members" are membership rosters, so they don't
+ * contribute groups or callings — but they are the only place unassigned members
+ * appear, so their Name column is harvested into `allMembers`.
  */
 
 export interface PDFCell {
@@ -98,14 +100,46 @@ export async function extractRowsFromPDF(file: File): Promise<PDFRow[]> {
   return rows
 }
 
-/** Headings sit alone in the left margin, one indent step out from table rows. */
+/**
+ * Headings sit alone in the left margin, one indent step out from table rows.
+ *
+ * Primary and Nursery classes pin a room number to the far right of the heading
+ * row ("Nursery … Room: 24-26"). It's an annotation on the heading rather than a
+ * second column, so a heading is still a heading with one alongside it — without
+ * this, those classes go unrecognized and their callings fall onto the parent
+ * organization.
+ */
 function isHeadingSlot(row: PDFRow): boolean {
-  return row.cells.length === 1 && Math.abs(row.cells[0].x - HEADER_X) <= X_TOLERANCE
+  const first = row.cells[0]
+  if (!first || Math.abs(first.x - HEADER_X) > X_TOLERANCE) return false
+  return row.cells.length === 1 || (row.cells.length === 2 && /^Room:/i.test(row.cells[1].text))
 }
 
 /** Roster sections list membership, not callings. */
 function isRosterHeading(name: string): boolean {
   return /\bMembers$/i.test(name)
+}
+
+/**
+ * A roster's Name column, located from its "Name | Age | …" header row. Roster
+ * tables come in two shapes (with and without a Gender column), so the second
+ * column's x is read off the header rather than assumed.
+ */
+interface RosterColumns {
+  nameX: number
+  secondX: number
+}
+
+/**
+ * Pulls the name out of a roster row. Rows carry a "*" or "**" footnote marker
+ * in the left margin that would otherwise be read as part of the name, and a
+ * name too long for its cell wraps onto its own row with no other cells.
+ */
+function rosterNameFragment(row: PDFRow, roster: RosterColumns): string {
+  const cells = row.cells.filter(
+    (c) => c.x >= roster.nameX - 3 && c.x < roster.secondX - 10 && !/^\*+$/.test(c.text)
+  )
+  return cells.map((c) => c.text).join(' ')
 }
 
 export function parseCallingReport(rows: PDFRow[]): ParsedBoard {
@@ -118,6 +152,22 @@ export function parseCallingReport(rows: PDFRow[]): ParsedBoard {
   let currentSubgroup = ''
   // Column x-positions captured from the active "Calling | Name | Sustained" header.
   let columns: number[] | null = null
+  // Set while a membership roster is open, cleared by anything that ends a table.
+  let roster: RosterColumns | null = null
+  // A wrapped name isn't complete until we've seen the row after it, so hold it
+  // back rather than adding the first half to the set.
+  let pendingName: string | null = null
+
+  const commitPendingName = () => {
+    if (pendingName) allMembers.add(pendingName)
+    pendingName = null
+  }
+
+  const endTable = () => {
+    commitPendingName()
+    columns = null
+    roster = null
+  }
 
   const keyFor = (group: string, subgroup: string) =>
     subgroup ? `${group} › ${subgroup}` : group
@@ -128,7 +178,10 @@ export function parseCallingReport(rows: PDFRow[]): ParsedBoard {
 
     // --- Organization header -------------------------------------------------
     if (isHeadingSlot(row) && row.height === GROUP_HEIGHT) {
-      columns = null
+      endTable()
+      // A roster heading ("Elders Quorum Members") introduces no callings, but
+      // the roster table under it still gets read — that's driven by its own
+      // "Name | Age | …" header below, not by this heading.
       if (isRosterHeading(first.text)) continue
       currentGroup = first.text
       currentSubgroup = ''
@@ -139,35 +192,59 @@ export function parseCallingReport(rows: PDFRow[]): ParsedBoard {
     // --- Table boundaries ----------------------------------------------------
     if (first.text === 'Calling' && row.cells.length > 1) {
       // Column positions vary per table, so read them off each header row.
+      endTable()
       columns = row.cells.map((c) => c.x)
       continue
     }
 
+    // A roster header also repeats at the top of each page the roster spills
+    // onto, which is what lets a roster resume after the page furniture.
     if (first.text === 'Name' && row.cells.length > 1) {
-      columns = null
+      endTable()
+      roster = { nameX: first.x, secondX: row.cells[1].x }
       continue
     }
 
     // Row counts and footnotes close out a table. Both sit in the heading slot,
-    // which keeps them from swallowing custom callings — those are marked with a
-    // leading asterisk too, but live in the table body.
+    // which keeps them from swallowing custom callings or roster rows — those
+    // are marked with a leading asterisk too, but have cells beside it.
     if (isHeadingSlot(row) && (/^Count:/.test(first.text) || first.text.startsWith('*'))) {
-      columns = null
+      endTable()
       continue
     }
 
     // --- Subgroup header -----------------------------------------------------
     if (isHeadingSlot(row) && SUBGROUP_HEIGHTS.includes(row.height)) {
-      columns = null
+      endTable()
       currentSubgroup = isRosterHeading(first.text) ? '' : first.text
       if (currentSubgroup) console.log(`[Parser]   Subgroup: ${currentSubgroup}`)
       continue
     }
 
-    // --- Calling row ---------------------------------------------------------
     // Page headers and footers share the subgroup text size, so require body
-    // height here to keep them out of the table.
-    if (!columns || !currentGroup || row.height !== BODY_HEIGHT) continue
+    // height here to keep them out of either table.
+    if (row.height !== BODY_HEIGHT) continue
+
+    // --- Roster row ----------------------------------------------------------
+    // Rosters are the only place members without a calling appear, so harvest
+    // the names even though the section contributes no groups or positions.
+    if (roster) {
+      const fragment = rosterNameFragment(row, roster)
+      if (!fragment) continue
+
+      // Every LCR name is "Last, First" — a fragment with no comma is the tail
+      // of the name above it, which wrapped onto its own row.
+      if (fragment.includes(',')) {
+        commitPendingName()
+        pendingName = fragment
+      } else if (pendingName) {
+        pendingName = `${pendingName} ${fragment}`
+      }
+      continue
+    }
+
+    // --- Calling row ---------------------------------------------------------
+    if (!columns || !currentGroup) continue
 
     // Assign each cell to its nearest column.
     const byColumn: string[] = []
@@ -210,6 +287,9 @@ export function parseCallingReport(rows: PDFRow[]): ParsedBoard {
       allMembers.add(memberName)
     }
   }
+
+  // A roster that runs to the last row of the document has no terminator.
+  commitPendingName()
 
   const groups = Array.from(groupMap.values()).filter((g) => g.positions.length > 0)
 
