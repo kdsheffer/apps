@@ -11,16 +11,50 @@ import { BoardPage } from './pages/BoardPage'
 
 const queryClient = new QueryClient()
 
+// How long to wait for getSession() before giving up on it. Blocked storage or
+// a request that never returns can leave the promise unsettled, and without a
+// deadline the app sits on "Loading..." with nothing to show the user.
+const SESSION_TIMEOUT_MS = 10_000
+
 function AppRoutes() {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [recovering, setRecovering] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
+    // A failed OAuth redirect comes back with the reason in the URL fragment,
+    // and supabase-js strips the hash as it initializes, so read it first.
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const redirectError = hash.get('error_description') ?? hash.get('error')
+
+    let settled = false
+    const finish = (nextUser: User | null, message: string | null) => {
+      if (settled) return
+      settled = true
+      if (message) console.error('[auth] sign-in failed:', message)
+      setUser(nextUser)
+      setAuthError(message)
       setLoading(false)
-    })
+    }
+
+    const timer = setTimeout(() => {
+      finish(
+        null,
+        redirectError ??
+          "This browser didn't finish reading your session. If it has cross-site tracking prevention or cookies blocked, allow them for this site and try again."
+      )
+    }, SESSION_TIMEOUT_MS)
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session }, error }) => {
+        finish(session?.user ?? null, session ? null : redirectError ?? error?.message ?? null)
+      })
+      .catch((error: unknown) => {
+        finish(null, redirectError ?? (error instanceof Error ? error.message : String(error)))
+      })
+      .finally(() => clearTimeout(timer))
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null)
@@ -29,7 +63,10 @@ function AppRoutes() {
       if (event === 'PASSWORD_RECOVERY') setRecovering(true)
     })
 
-    return () => subscription?.unsubscribe()
+    return () => {
+      clearTimeout(timer)
+      subscription?.unsubscribe()
+    }
   }, [])
 
   if (loading) {
@@ -46,7 +83,7 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/" element={user ? <Navigate to="/wards" /> : <LoginPage />} />
+      <Route path="/" element={user ? <Navigate to="/wards" /> : <LoginPage authError={authError} />} />
       <Route path="/wards" element={user ? <WardsPage /> : <Navigate to="/" />} />
       <Route path="/wards/:wardId/board" element={user ? <BoardPage /> : <Navigate to="/" />} />
       <Route path="/admin" element={user ? <AdminPage /> : <Navigate to="/" />} />

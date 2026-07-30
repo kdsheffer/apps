@@ -1,6 +1,7 @@
 import { useAuth } from '../hooks/useAuth'
 import { useWards } from '../hooks/useWards'
 import { useNavigate } from 'react-router-dom'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 export function WardsPage() {
   const { user, signOut } = useAuth()
@@ -36,6 +37,7 @@ export function WardsPage() {
             >
               Sign Out
             </button>
+            <ThemeToggle className="bg-gray-200" />
           </div>
         </div>
       </header>

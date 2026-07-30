@@ -5,6 +5,16 @@ import type { Board } from '../types'
 
 export const WORKING_DRAFT_NAME = 'Working Draft'
 
+/**
+ * A ward has three kinds of board and only ever one of the first two:
+ *
+ *   promoted — the live board, read-only, what everybody sees
+ *   draft    — the one editable board; every change lands here
+ *   archived — boards that used to be live, kept as history
+ *
+ * Promoting the draft archives the outgoing live board and leaves the ward with
+ * no draft until the next edit (or import) opens a fresh one.
+ */
 export function useBoardVersioning(wardId: string) {
   const queryClient = useQueryClient()
 
@@ -12,11 +22,10 @@ export function useBoardVersioning(wardId: string) {
     queryClient.invalidateQueries({ queryKey: ['boards', wardId] })
     queryClient.invalidateQueries({ queryKey: ['promotedBoard', wardId] })
     queryClient.invalidateQueries({ queryKey: ['board', wardId] })
-    queryClient.invalidateQueries({ queryKey: ['drafts', wardId] })
+    queryClient.invalidateQueries({ queryKey: ['draft', wardId] })
     queryClient.invalidateQueries({ queryKey: ['boardData'] })
   }
 
-  // Every board (promoted + drafts + archived) for this ward
   const allBoards = useQuery({
     queryKey: ['boards', wardId],
     queryFn: async () => {
@@ -48,23 +57,23 @@ export function useBoardVersioning(wardId: string) {
     enabled: !!wardId,
   })
 
-  const drafts = useQuery({
-    queryKey: ['drafts', wardId],
+  const draft = useQuery({
+    queryKey: ['draft', wardId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('boards')
         .select('*')
         .eq('ward_id', wardId)
         .eq('status', 'draft')
-        .order('created_at', { ascending: false })
+        .maybeSingle()
 
       if (error) throw error
-      return (data || []) as Board[]
+      return (data as Board) ?? null
     },
     enabled: !!wardId,
   })
 
-  /** Manual "+ New Draft" — a named, timestamped copy of the live board. */
+  /** Opens the draft by hand, rather than waiting for the first edit to do it. */
   const createDraft = useMutation({
     mutationFn: async () => {
       const promotedRes = await supabase
@@ -77,9 +86,8 @@ export function useBoardVersioning(wardId: string) {
       if (promotedRes.error) throw promotedRes.error
       if (!promotedRes.data) throw new Error('No live board to copy from')
 
-      const promoted = promotedRes.data as Board
-      const { board } = await forkBoard(promoted.id, {
-        name: `${promoted.name} — Draft ${new Date().toLocaleString()}`,
+      const { board } = await forkBoard((promotedRes.data as Board).id, {
+        name: WORKING_DRAFT_NAME,
       })
       return board
     },
@@ -90,56 +98,32 @@ export function useBoardVersioning(wardId: string) {
     mutationFn: async (draftBoardId: string) => {
       const currentPromotedRes = await supabase
         .from('boards')
-        .select('*')
+        .select('id')
         .eq('ward_id', wardId)
         .eq('status', 'promoted')
         .maybeSingle()
 
-      const currentPromoted = (currentPromotedRes.data as Board) ?? null
+      if (currentPromotedRes.error) throw currentPromotedRes.error
+      const currentPromoted = currentPromotedRes.data as { id: string } | null
 
-      const otherDraftsRes = await supabase
-        .from('boards')
-        .select('id')
-        .eq('ward_id', wardId)
-        .eq('status', 'draft')
-        .neq('id', draftBoardId)
-
-      const otherDrafts = otherDraftsRes.data || []
-
-      // No true transactions through the JS client, so this runs in the order
-      // that keeps the one-promoted-per-ward index satisfied at every step.
+      // No transactions through the JS client, so this runs in the order that
+      // keeps the one-promoted-per-ward index satisfied at every step.
       if (currentPromoted) {
         const archiveRes = await supabase
           .from('boards')
-          .update({ status: 'archived', promoted_at: null, is_working_draft: false })
+          .update({ status: 'archived', promoted_at: null })
           .eq('id', currentPromoted.id)
 
         if (archiveRes.error) throw archiveRes.error
       }
 
-      // Clearing is_working_draft matters: the partial unique index would
-      // otherwise keep the ward from ever opening a new working draft.
       const promoteRes = await supabase
         .from('boards')
-        .update({
-          status: 'promoted',
-          promoted_at: new Date().toISOString(),
-          is_working_draft: false,
-        })
+        .update({ status: 'promoted', promoted_at: new Date().toISOString() })
         .eq('id', draftBoardId)
 
       if (promoteRes.error) throw promoteRes.error
-
-      if (otherDrafts.length > 0) {
-        const deleteRes = await supabase
-          .from('boards')
-          .delete()
-          .in('id', otherDrafts.map((d) => d.id))
-
-        if (deleteRes.error) throw deleteRes.error
-      }
-
-      return { promotedBoardId: draftBoardId, deletedDraftCount: otherDrafts.length }
+      return { promotedBoardId: draftBoardId }
     },
     onSuccess: invalidateAll,
   })
@@ -163,7 +147,7 @@ export function useBoardVersioning(wardId: string) {
   return {
     allBoards,
     promotedBoard,
-    drafts,
+    draft,
     createDraft,
     promoteDraft,
     deleteDraft,

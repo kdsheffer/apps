@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 /**
  * Shown after a reset link is followed. Supabase signs the user in with a
@@ -30,7 +31,8 @@ export function SetPasswordPage({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
+    <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4">
+      <ThemeToggle className="absolute right-4 top-4" />
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-xl">
         <h1 className="text-2xl font-bold text-gray-900">Choose a new password</h1>
         <p className="mt-2 text-sm text-gray-600">

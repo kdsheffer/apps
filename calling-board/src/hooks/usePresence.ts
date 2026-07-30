@@ -1,11 +1,17 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import type { Profile } from '../types'
 
-export interface ActiveUser extends Profile {
+/**
+ * Somebody else looking at the same board. This is a presence payload, not a
+ * profile row — it carries only what the avatar strip needs to show.
+ */
+export interface ActiveUser {
+  id: string
   user_id: string
   email: string
   full_name?: string
+  is_super_admin: boolean
+  created_at: string
 }
 
 export function usePresence(boardId: string | undefined) {

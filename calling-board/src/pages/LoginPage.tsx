@@ -1,14 +1,17 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { ThemeToggle } from '../components/ThemeToggle'
 
 type Mode = 'signin' | 'signup'
 
-export function LoginPage() {
+export function LoginPage({ authError }: { authError?: string | null }) {
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // A redirect that came back without a session lands here, so the reason shows
+  // up on the form the user was sent back to.
+  const [error, setError] = useState<string | null>(authError ?? null)
   const [notice, setNotice] = useState<string | null>(null)
 
   const reset = () => {
@@ -81,7 +84,8 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4 py-10">
+    <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 px-4 py-10">
+      <ThemeToggle className="absolute right-4 top-4" />
       <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-xl">
         <div className="mb-8 text-center">
           <h1 className="text-3xl font-bold text-gray-900">Calling Board</h1>

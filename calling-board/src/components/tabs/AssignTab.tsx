@@ -2,8 +2,9 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { MemberChip } from '../MemberChip'
 import { MemberCombobox } from '../MemberCombobox'
+import { TruncatedText } from '../TruncatedText'
 import { dropId } from '../../lib/dnd'
-import { makePositionView, positionPassesFilters } from '../../lib/boardSelectors'
+import { byName, makePositionView, positionPassesFilters } from '../../lib/boardSelectors'
 import type { BoardViewContext } from './shared'
 import type { Position } from '../../types'
 
@@ -97,6 +98,34 @@ function FlagFilter({
   )
 }
 
+/** The scope switch each panel carries in its header. */
+function ScopeToggle({
+  all,
+  onChange,
+  labels,
+}: {
+  all: boolean
+  onChange: (all: boolean) => void
+  labels: [narrow: string, all: string]
+}) {
+  return (
+    <div className="flex rounded border border-gray-300">
+      {([false, true] as const).map((value, i) => (
+        <button
+          key={labels[i]}
+          onClick={() => onChange(value)}
+          aria-pressed={all === value}
+          className={`px-2.5 py-1 text-sm ${i === 0 ? 'rounded-l' : 'rounded-r'} ${
+            all === value ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          {labels[i]}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function OpenPositionRow({
   position,
   path,
@@ -143,20 +172,13 @@ function OpenPositionRow({
         >
           ★
         </button>
-        {/* Long calling names get cut off next to the assign box, and several
-            differ only in their tail ("… Assistant Activity Coordinator"), so
-            the full text has to be reachable on hover. */}
+        {/* Long calling names get cut off next to the assign box, so every line
+            here hands the full text back on hover. */}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-gray-900" title={position.title}>
-            {position.title}
-          </p>
-          <p className="truncate text-xs text-gray-500" title={path}>
-            {path}
-          </p>
+          <TruncatedText text={position.title} className="text-sm font-medium text-gray-900" />
+          <TruncatedText text={path} className="text-xs text-gray-500" />
           {heldBy ? (
-            <p className="truncate text-xs text-gray-700" title={heldBy}>
-              {heldBy}
-            </p>
+            <TruncatedText text={heldBy} className="text-xs text-gray-700" />
           ) : (
             <p className="text-xs font-medium text-blue-700">Open</p>
           )}
@@ -174,9 +196,7 @@ function OpenPositionRow({
         )}
       </div>
       {position.notes && (
-        <p className="mt-1 truncate text-xs italic text-amber-800" title={position.notes}>
-          {position.notes}
-        </p>
+        <TruncatedText text={position.notes} className="mt-1 text-xs italic text-amber-800" />
       )}
     </li>
   )
@@ -186,9 +206,11 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
   const { data, index, filters } = ctx
 
   // This tab shows two independent lists, so the shared "Flagged" filter in the
-  // bar can't serve both — each panel gets its own. Vacancies are the usual
-  // reason to be here, so the calling list starts narrowed to open ones.
+  // bar can't serve both — each panel gets its own scope and flag filter.
+  // Vacancies and free people are the usual reason to be here, so both lists
+  // start narrowed and widen to "All" on request.
   const [showAll, setShowAll] = useState(false)
+  const [allMembers, setAllMembers] = useState(false)
   const [flaggedCallings, setFlaggedCallings] = useState(false)
   const [flaggedMembers, setFlaggedMembers] = useState(false)
   const panes = usePaneHeight()
@@ -234,7 +256,13 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
     0
   )
 
-  const membersShown = ctx.unassigned.filter((m) => {
+  // "All" is for the case the star filter exists to serve: someone you flagged
+  // is already serving, and hiding them means you can't see the person you came
+  // looking for. Their callings ride along on the chip so it stays obvious that
+  // dragging them adds a second one.
+  const memberPool = allMembers ? [...ctx.visibleMembers].sort(byName) : ctx.unassigned
+
+  const membersShown = memberPool.filter((m) => {
     if (!filters.showInactive && m.archived_at) return false
     if (flaggedMembers && !m.flagged) return false
     if (filters.search && !m.full_name.toLowerCase().includes(filters.search.trim().toLowerCase()))
@@ -262,26 +290,7 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
             {showAll ? 'All callings' : 'Open callings'}
           </h2>
           <div className="flex items-center gap-2 print:hidden">
-            <div className="flex rounded border border-gray-300">
-              <button
-                onClick={() => setShowAll(false)}
-                aria-pressed={!showAll}
-                className={`rounded-l px-2.5 py-1 text-sm ${
-                  !showAll ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Open
-              </button>
-              <button
-                onClick={() => setShowAll(true)}
-                aria-pressed={showAll}
-                className={`rounded-r px-2.5 py-1 text-sm ${
-                  showAll ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                All
-              </button>
-            </div>
+            <ScopeToggle all={showAll} onChange={setShowAll} labels={['Open', 'All']} />
             <FlagFilter
               active={flaggedCallings}
               onClick={() => setFlaggedCallings((f) => !f)}
@@ -345,7 +354,7 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
         </div>
       </div>
 
-      {/* Available members */}
+      {/* Members */}
       <div
         ref={releaseZone.setNodeRef}
         className={`flex min-h-0 flex-col rounded-lg shadow transition-colors ${
@@ -354,8 +363,11 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
       >
         <div className="shrink-0 border-b border-gray-100 p-4 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold text-gray-900">Available members</h2>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {allMembers ? 'All members' : 'Available members'}
+            </h2>
             <div className="flex items-center gap-2 print:hidden">
+              <ScopeToggle all={allMembers} onChange={setAllMembers} labels={['Available', 'All']} />
               <FlagFilter
                 active={flaggedMembers}
                 onClick={() => setFlaggedMembers((f) => !f)}
@@ -367,6 +379,8 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
           <p className="mt-1 text-xs text-gray-500 print:hidden">
             Drag someone onto a calling to assign them, or drop an assigned member here to release
             them.
+            {allMembers &&
+              ' Anyone already serving is tagged with their calling — dragging them adds a second one.'}
           </p>
         </div>
 
@@ -374,23 +388,41 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
           {membersShown.length === 0 ? (
             <p className="py-8 text-center text-sm text-gray-500">
               {flaggedMembers
-                ? 'No flagged members are without a calling.'
-                : 'Everyone matching your filters already has a calling.'}
+                ? allMembers
+                  ? 'No flagged members match your filters.'
+                  : 'No flagged members are without a calling.'
+                : allMembers
+                  ? 'No members match your filters.'
+                  : 'Everyone matching your filters already has a calling.'}
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {membersShown.map((member) => (
-                <MemberChip
-                  key={member.id}
-                  member={member}
-                  compact
-                  drag={{ type: 'member', memberId: member.id, name: member.full_name }}
-                  onToggleFlag={
-                    ctx.readOnly ? undefined : () => ctx.actions.toggleMemberFlag(member)
-                  }
-                  onContextMenu={(e) => ctx.openMemberMenu(e, member)}
-                />
-              ))}
+              {membersShown.map((member) => {
+                const callings = ctx.servingElsewhere.get(member.id) || []
+
+                return (
+                  <MemberChip
+                    key={member.id}
+                    member={member}
+                    compact
+                    drag={{ type: 'member', memberId: member.id, name: member.full_name }}
+                    onToggleFlag={
+                      ctx.readOnly ? undefined : () => ctx.actions.toggleMemberFlag(member)
+                    }
+                    onContextMenu={(e) => ctx.openMemberMenu(e, member)}
+                    detail={
+                      callings.length > 0 ? (
+                        <p className="mt-0.5 flex items-center gap-1.5 text-xs text-gray-500">
+                          <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 font-medium text-gray-600">
+                            Serving
+                          </span>
+                          <TruncatedText text={callings.join(', ')} className="min-w-0 flex-1" />
+                        </p>
+                      ) : undefined
+                    }
+                  />
+                )
+              })}
             </div>
           )}
         </div>

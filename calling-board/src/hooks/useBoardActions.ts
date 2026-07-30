@@ -10,6 +10,7 @@ interface Options {
   boardId: string
   board: Board | null | undefined
   index: BoardIndex
+  canEdit: boolean
   onSwitchBoard: (boardId: string) => void
 }
 
@@ -31,8 +32,15 @@ interface RestorableAssignment {
  * the redirect, so it captures the ids the change actually landed on rather
  * than the ones the user clicked.
  */
-export function useBoardActions({ wardId, boardId, board, index, onSwitchBoard }: Options) {
-  const editor = useBoardEditor({ wardId, boardId, board, onSwitchBoard })
+export function useBoardActions({
+  wardId,
+  boardId,
+  board,
+  index,
+  canEdit,
+  onSwitchBoard,
+}: Options) {
+  const editor = useBoardEditor({ wardId, boardId, board, canEdit, onSwitchBoard })
   const mutations = useBoardMutations()
   const history = useHistory()
   const [error, setError] = useState<string | null>(null)
@@ -53,17 +61,19 @@ export function useBoardActions({ wardId, boardId, board, index, onSwitchBoard }
   )
 
   // Members are ward-scoped: editing one is not editing the live board, so
-  // these bypass the draft machinery entirely.
+  // these bypass the draft machinery entirely — including its permission check,
+  // which is why they repeat it here.
   const runDirect = useCallback(
     async (fn: () => Promise<HistoryEntry | void>) => {
       try {
+        if (!canEdit) throw new Error('You have view-only access to this ward.')
         const entry = await fn()
         if (entry) history.push(entry)
       } catch (e) {
         describe(e)
       }
     },
-    [history]
+    [canEdit, history]
   )
 
   /**
@@ -228,8 +238,19 @@ export function useBoardActions({ wardId, boardId, board, index, onSwitchBoard }
         }
       }),
 
+    // Only a vacant calling can be parked — the database enforces it too, but
+    // saying so up front beats surfacing a constraint error.
     togglePositionActive: (position: Position) =>
       run(async (ctx) => {
+        const occupants = index.byPosition.get(position.id) || []
+        if (!position.inactive_at && occupants.length > 0) {
+          throw new Error(
+            `Release ${occupants
+              .map((o) => o.member?.full_name ?? 'whoever holds it')
+              .join(' and ')} from ${position.title} before marking it inactive.`
+          )
+        }
+
         const id = ctx.id(position.id)
         const previous = position.inactive_at
         const inactive_at = previous ? null : new Date().toISOString()
@@ -434,8 +455,20 @@ export function useBoardActions({ wardId, boardId, board, index, onSwitchBoard }
         }
       }),
 
+    // Same rule from the other side: somebody serving can't be marked inactive.
     toggleMemberActive: (member: Member) =>
       runDirect(async () => {
+        const held = index.byMember.get(member.id) || []
+        if (!member.archived_at && held.length > 0) {
+          const titles = held
+            .map((a) => index.positionsById.get(a.position_id)?.title)
+            .filter(Boolean)
+            .join(', ')
+          throw new Error(
+            `Release ${member.full_name} from ${titles || 'their calling'} before marking them inactive.`
+          )
+        }
+
         const previous = member.archived_at
         const archived_at = previous ? null : new Date().toISOString()
         await mutations.updateMember.mutateAsync({ memberId: member.id, archived_at })

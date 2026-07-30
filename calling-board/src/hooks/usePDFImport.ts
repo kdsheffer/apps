@@ -1,32 +1,52 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../lib/supabase'
 import { extractRowsFromPDF, parseCallingReport } from '../lib/pdfParser'
+import { emptySnapshot, planImportMerge, summarize } from '../lib/mergeImport'
+import { executeMergePlan, loadSnapshot } from '../lib/applyMerge'
+import { forkBoard } from '../lib/forkBoard'
+import { WORKING_DRAFT_NAME } from './useBoardVersioning'
+import type { MergePlan, MergeSummary } from '../lib/mergeImport'
 import type { Board } from '../types'
 
-interface PDFImportResult {
-  boardId: string
-  boardName: string
-  groupCount: number
-  positionCount: number
-  memberCount: number
+/**
+ * `null` starts from an empty board — the right choice for a ward's very first
+ * import, and an escape hatch when a board has gone wrong badly enough to be
+ * worth rebuilding.
+ */
+export type BaseBoardChoice = string | null
+
+export interface ImportRequest {
+  file: File
+  baseBoardId: BaseBoardChoice
 }
 
+export interface ImportResult {
+  boardId: string
+  boardName: string
+  summary: MergeSummary
+  retired: MergePlan['retired']
+  absentMembers: MergePlan['absentMembers']
+}
+
+/**
+ * Imports an LCR report by merging it into the ward's editable draft.
+ *
+ * Everything lands in the draft, never the live board — the same rule the rest
+ * of the app follows. Which board the draft *starts* from is the caller's
+ * choice: merging into the existing draft keeps working on it, while any other
+ * base replaces the draft with a fresh copy of that board.
+ */
 export function usePDFImport(wardId: string) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (file: File): Promise<PDFImportResult> => {
-      console.log('[Import] Starting PDF import process')
-      console.log('[Import] File:', file.name, `(${(file.size / 1024 / 1024).toFixed(2)} MB)`)
-
-      // Extract text from PDF
-      console.log('[Import] Step 1: Extracting text from PDF...')
+    mutationFn: async ({ file, baseBoardId }: ImportRequest): Promise<ImportResult> => {
+      console.log('[Import] Reading', file.name)
       const rows = await extractRowsFromPDF(file)
-
-      // Parse the calling report
-      console.log('[Import] Step 2: Parsing calling report...')
       const parsed = parseCallingReport(rows)
-      console.log(`[Import] Parsed: ${parsed.groups.length} groups, ${parsed.allMembers.size} members`)
+      console.log(
+        `[Import] Parsed ${parsed.groups.length} organizations, ${parsed.allMembers.size} members`
+      )
 
       if (parsed.groups.length === 0) {
         throw new Error(
@@ -35,224 +55,96 @@ export function usePDFImport(wardId: string) {
         )
       }
 
-      // Get or create members - optimized batch operation
-      console.log('[Import] Step 3: Managing members...')
-      const memberMap = new Map<string, string>() // name -> id
-
-      // Fetch existing members for this ward
-      console.log('[Import] Fetching existing members...')
-      const { data: existingMembers } = await supabase
-        .from('members')
-        .select('id, full_name')
-        .eq('ward_id', wardId)
-        .is('archived_at', null)
-
-      // Map existing members
-      existingMembers?.forEach((member) => {
-        memberMap.set(member.full_name, member.id)
-      })
-      console.log(`[Import] Found ${existingMembers?.length || 0} existing members`)
-
-      // Create new members for any not found - batch insert
-      const newMemberNames = Array.from(parsed.allMembers).filter(
-        (name) => !memberMap.has(name)
-      )
-
-      console.log(`[Import] Creating ${newMemberNames.length} new members...`)
-      if (newMemberNames.length > 0) {
-        const { data: created } = await supabase
-          .from('members')
-          .insert(
-            newMemberNames.map((name) => ({
-              ward_id: wardId,
-              full_name: name,
-            }))
-          )
-          .select('id, full_name')
-
-        created?.forEach((member) => {
-          memberMap.set(member.full_name, member.id)
-        })
-        console.log(`[Import] Created ${created?.length || 0} new members`)
-      }
-      console.log(`[Import] Total members available: ${memberMap.size}`)
-
-      // Create draft board
-      console.log('[Import] Step 4: Creating draft board...')
-      const boardName = `${file.name} - ${new Date().toLocaleDateString()}`
-      const { data: boardRes, error: boardError } = await supabase
+      const draftRes = await supabase
         .from('boards')
-        .insert({
-          ward_id: wardId,
-          status: 'draft',
-          name: boardName,
-          created_by: (await supabase.auth.getUser()).data.user?.id,
-        })
-        .select('id')
-        .single()
+        .select('*')
+        .eq('ward_id', wardId)
+        .eq('status', 'draft')
+        .maybeSingle()
 
-      if (boardError || !boardRes) {
-        throw new Error(`Failed to create board: ${boardError?.message}`)
-      }
+      if (draftRes.error) throw draftRes.error
+      const draft = (draftRes.data as Board) ?? null
 
-      const board = boardRes as Board
-      console.log(`[Import] Created board: ${boardRes.id}`)
-      let totalPositions = 0
+      const target = await prepareTarget({ wardId, draft, baseBoardId, fileName: file.name })
+      console.log(`[Import] Merging into board ${target.id} (${target.name})`)
 
-      console.log(`[Import] Step 5: Creating organizations and subgroups...`)
+      const snapshot = target.fresh ? emptySnapshot : await loadSnapshot(target.id, wardId)
+      const plan = planImportMerge(parsed, snapshot)
+      const summary = summarize(plan)
+      console.log('[Import] Plan', summary)
 
-      // Top-level names are unique across the report, but subgroup names are not
-      // — "Teachers" and "Music" each appear under several organizations — so
-      // subgroups are keyed by parent as well as name.
-      const subgroupKey = (parentName: string, name: string) => `${parentName} › ${name}`
+      await executeMergePlan(plan, { boardId: target.id, wardId })
 
-      // An organization that only holds subgroups has no callings of its own, so
-      // it never shows up as a parsed group. Create those parents anyway.
-      const topLevelNames = new Set<string>()
-      for (const group of parsed.groups) {
-        topLevelNames.add(group.parentName ?? group.name)
-      }
-
-      const topLevelIds = new Map<string, string>()
-      const { data: createdParents, error: parentError } = await supabase
-        .from('groups')
-        .insert(
-          Array.from(topLevelNames).map((name, idx) => ({
-            board_id: board.id,
-            name,
-            sort_order: idx,
-          }))
-        )
-        .select('id, name')
-
-      if (parentError || !createdParents) {
-        throw new Error(`Failed to create organizations: ${parentError?.message}`)
-      }
-      createdParents.forEach((g) => topLevelIds.set(g.name, g.id))
-      console.log(`[Import] Created ${createdParents.length} organizations`)
-
-      // Create subgroups, pointing each at its parent organization.
-      const childGroups = parsed.groups.filter((g) => g.parentName)
-      const subgroupIds = new Map<string, string>()
-
-      if (childGroups.length > 0) {
-        const { data: createdChildren, error: childError } = await supabase
-          .from('groups')
-          .insert(
-            childGroups.map((group, idx) => ({
-              board_id: board.id,
-              name: group.name,
-              parent_id: topLevelIds.get(group.parentName!) ?? null,
-              sort_order: idx,
-            }))
-          )
-          .select('id, name')
-
-        if (childError || !createdChildren) {
-          throw new Error(`Failed to create subgroups: ${childError?.message}`)
-        }
-
-        // Insert order is preserved, so zip the results back onto the parsed
-        // groups; matching by name alone would collide on repeated subgroups.
-        createdChildren.forEach((created, idx) => {
-          const source = childGroups[idx]
-          subgroupIds.set(subgroupKey(source.parentName!, source.name), created.id)
-        })
-        console.log(`[Import] Created ${createdChildren.length} subgroups`)
-      }
-
-      const groupIdFor = (group: (typeof parsed.groups)[number]) =>
-        group.parentName
-          ? subgroupIds.get(subgroupKey(group.parentName, group.name))
-          : topLevelIds.get(group.name)
-
-      // Batch create all positions
-      console.log('[Import] Step 6: Creating positions and callings...')
-
-      // A title can repeat within a group — four "Teachers Quorum Adviser" seats,
-      // for example — so keep an ordered list of the parsed positions alongside
-      // the insert payload and pair them up by index afterwards.
-      const positionsToCreate: any[] = []
-      const positionSources: (typeof parsed.groups)[number]['positions'] = []
-
-      for (const group of parsed.groups) {
-        const groupId = groupIdFor(group)
-        if (!groupId) continue
-
-        group.positions.forEach((position, pIdx) => {
-          positionsToCreate.push({
-            group_id: groupId,
-            title: position.title,
-            sort_order: pIdx,
-          })
-          positionSources.push(position)
-        })
-      }
-
-      console.log(`[Import] Creating ${positionsToCreate.length} positions...`)
-      const { data: createdPositions, error: posError } = await supabase
-        .from('positions')
-        .insert(positionsToCreate)
-        .select('id, title, group_id')
-
-      if (posError || !createdPositions) {
-        throw new Error(`Failed to create positions: ${posError?.message}`)
-      }
-
-      totalPositions = createdPositions.length
-      console.log(`[Import] Created ${totalPositions} positions`)
-
-      // Batch create all assignments
-      console.log('[Import] Step 7: Creating member assignments...')
-      const assignmentsToCreate: any[] = []
-      createdPositions.forEach((createdPosition, idx) => {
-        const source = positionSources[idx]
-        if (!source) return
-
-        for (const calling of source.callings) {
-          const memberId = memberMap.get(calling.memberName)
-          if (!memberId) {
-            console.warn(`[Import] Member not found: ${calling.memberName}`)
-            continue
-          }
-
-          assignmentsToCreate.push({
-            position_id: createdPosition.id,
-            member_id: memberId,
-            called_date: calling.calledDate,
-          })
-        }
+      // Best-effort audit trail — a failed insert here shouldn't undo a good
+      // import, so it's logged rather than thrown.
+      const { error: auditError } = await supabase.from('imports').insert({
+        ward_id: wardId,
+        uploaded_by: (await supabase.auth.getUser()).data.user?.id,
+        file_name: file.name,
+        status: 'complete',
+        base_board_id: baseBoardId,
+        resulting_board_id: target.id,
+        summary,
       })
+      if (auditError) console.warn('[Import] Could not record the import:', auditError.message)
 
-      console.log(`[Import] Creating ${assignmentsToCreate.length} assignments...`)
-      if (assignmentsToCreate.length > 0) {
-        const { error: assignError } = await supabase
-          .from('position_assignments')
-          .insert(assignmentsToCreate)
-
-        if (assignError) {
-          console.warn(`[Import] Some assignments failed: ${assignError.message}`)
-        } else {
-          console.log(`[Import] Created ${assignmentsToCreate.length} assignments`)
-        }
-      }
-
-      console.log('[Import] ✅ Import complete!')
-      console.log(`[Import] Summary: ${parsed.groups.length} organizations, ${totalPositions} positions, ${parsed.allMembers.size} members`)
-
+      console.log('[Import] Done')
       return {
-        boardId: board.id,
-        boardName: board.name,
-        groupCount: topLevelNames.size + childGroups.length,
-        positionCount: totalPositions,
-        memberCount: parsed.allMembers.size,
+        boardId: target.id,
+        boardName: target.name,
+        summary,
+        retired: plan.retired,
+        absentMembers: plan.absentMembers,
       }
     },
-    onSuccess: (data) => {
-      // Invalidate relevant queries - be specific about which board was imported
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['boards', wardId] })
-      queryClient.invalidateQueries({ queryKey: ['drafts', wardId] })
-      queryClient.invalidateQueries({ queryKey: ['boardData', data.boardId] })
+      queryClient.invalidateQueries({ queryKey: ['draft', wardId] })
+      queryClient.invalidateQueries({ queryKey: ['boardData'] })
     },
   })
+}
+
+interface TargetOptions {
+  wardId: string
+  draft: Board | null
+  baseBoardId: BaseBoardChoice
+  fileName: string
+}
+
+/**
+ * Works out which board the merge writes to, and gets it into place.
+ *
+ * A ward holds one draft, so choosing a base other than the draft that already
+ * exists means replacing it. The UI asks before it comes to that.
+ */
+async function prepareTarget({ wardId, draft, baseBoardId, fileName }: TargetOptions) {
+  if (draft && baseBoardId === draft.id) {
+    return { id: draft.id, name: draft.name, fresh: false }
+  }
+
+  if (draft) {
+    const { error } = await supabase.from('boards').delete().eq('id', draft.id)
+    if (error) throw new Error(`Could not replace the existing draft: ${error.message}`)
+  }
+
+  if (baseBoardId) {
+    const { board } = await forkBoard(baseBoardId, { name: WORKING_DRAFT_NAME })
+    return { id: board.id, name: board.name, fresh: false }
+  }
+
+  const name = `${fileName.replace(/\.pdf$/i, '')} — ${new Date().toLocaleDateString()}`
+  const { data, error } = await supabase
+    .from('boards')
+    .insert({
+      ward_id: wardId,
+      status: 'draft',
+      name,
+      created_by: (await supabase.auth.getUser()).data.user?.id,
+    })
+    .select()
+    .single()
+
+  if (error || !data) throw new Error(`Could not create a board: ${error?.message}`)
+  return { id: (data as Board).id, name: (data as Board).name, fresh: true }
 }

@@ -34,6 +34,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# Throwaway Postgres clusters created by supabase/tests
+supabase/tests/.pgdata-*
+
 # TypeScript build artifacts
 *.tsbuildinfo
 vite.config.js

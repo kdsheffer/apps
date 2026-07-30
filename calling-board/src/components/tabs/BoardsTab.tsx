@@ -7,11 +7,12 @@ import type { ConfirmRequest } from './shared'
 interface BoardsTabProps {
   wardId: string
   currentBoardId: string
+  canEdit: boolean
   onLoadBoard: (boardId: string) => void
   confirm: (request: ConfirmRequest) => void
 }
 
-function StatusPill({ status, isWorking }: { status: Board['status']; isWorking: boolean }) {
+function StatusPill({ status }: { status: Board['status'] }) {
   if (status === 'promoted') {
     return (
       <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
@@ -28,17 +29,23 @@ function StatusPill({ status, isWorking }: { status: Board['status']; isWorking:
   }
   return (
     <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800">
-      {isWorking ? 'Working draft' : 'Draft'}
+      Draft · editable
     </span>
   )
 }
 
-export function BoardsTab({ wardId, currentBoardId, onLoadBoard, confirm }: BoardsTabProps) {
+export function BoardsTab({
+  wardId,
+  currentBoardId,
+  canEdit,
+  onLoadBoard,
+  confirm,
+}: BoardsTabProps) {
   const versioning = useBoardVersioning(wardId)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
 
-  const live = versioning.promotedBoard.data
-  const drafts = versioning.drafts.data || []
+  const live = versioning.promotedBoard.data ?? null
+  const draft = versioning.draft.data ?? null
   const archived = (versioning.allBoards.data || []).filter((b) => b.status === 'archived')
 
   const row = (board: Board, extra?: React.ReactNode) => {
@@ -81,7 +88,7 @@ export function BoardsTab({ wardId, currentBoardId, onLoadBoard, confirm }: Boar
           ) : (
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate font-medium text-gray-900">{board.name}</p>
-              <StatusPill status={board.status} isWorking={board.is_working_draft} />
+              <StatusPill status={board.status} />
               {isCurrent && (
                 <span className="rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">
                   Loaded
@@ -117,17 +124,20 @@ export function BoardsTab({ wardId, currentBoardId, onLoadBoard, confirm }: Boar
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Board versions</h2>
             <p className="mt-1 text-sm text-gray-600">
-              The live board can't be edited directly. Change anything while it's loaded and the
-              edit lands in the working draft instead — promote that draft when you're ready.
+              A ward has one live board and one draft. The live board can't be edited — change
+              anything while it's loaded and the edit lands in the draft instead. Promoting the
+              draft makes it live and files the old live board under history.
             </p>
           </div>
-          <button
-            onClick={() => versioning.createDraft.mutate()}
-            disabled={versioning.createDraft.isPending || !live}
-            className="shrink-0 rounded bg-green-600 px-4 py-2 font-medium text-white hover:bg-green-700 disabled:opacity-50"
-          >
-            {versioning.createDraft.isPending ? 'Creating…' : '+ New draft'}
-          </button>
+          {canEdit && !draft && (
+            <button
+              onClick={() => versioning.createDraft.mutate()}
+              disabled={versioning.createDraft.isPending || !live}
+              className="shrink-0 rounded bg-green-600 px-4 py-2 font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            >
+              {versioning.createDraft.isPending ? 'Creating…' : 'Start a draft'}
+            </button>
+          )}
         </div>
 
         {live && (
@@ -138,83 +148,75 @@ export function BoardsTab({ wardId, currentBoardId, onLoadBoard, confirm }: Boar
         )}
 
         <div className="mb-5">
-          <h3 className="mb-2 text-sm font-semibold text-gray-700">
-            Drafts {drafts.length > 0 && `(${drafts.length})`}
-          </h3>
-          {drafts.length === 0 ? (
+          <h3 className="mb-2 text-sm font-semibold text-gray-700">Draft</h3>
+          {!draft ? (
             <p className="text-sm text-gray-500">
-              No drafts. One is created automatically the first time you change the live board.
+              No draft yet. One opens automatically the first time you change the live board.
             </p>
           ) : (
-            <div className="space-y-2">
-              {drafts.map((draft) =>
-                row(
-                  draft,
-                  <>
-                    <button
-                      onClick={() => setRenaming({ id: draft.id, name: draft.name })}
-                      className="rounded bg-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-300"
-                    >
-                      Rename
-                    </button>
-                    <button
-                      onClick={() =>
-                        confirm({
-                          title: 'Promote this draft?',
-                          message: `"${draft.name}" becomes the live board.${
-                            live ? ' The current live board is archived.' : ''
-                          }${
-                            drafts.length > 1
-                              ? ` ${drafts.length - 1} other draft(s) will be deleted.`
-                              : ''
-                          }`,
-                          confirmLabel: 'Promote',
-                          onConfirm: async () => {
-                            await versioning.promoteDraft.mutateAsync(draft.id)
-                            onLoadBoard(draft.id)
-                          },
-                        })
-                      }
-                      disabled={versioning.promoteDraft.isPending}
-                      className="rounded bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                    >
-                      Promote
-                    </button>
-                    <button
-                      onClick={() =>
-                        confirm({
-                          title: 'Delete this draft?',
-                          message: `"${draft.name}" and every change in it will be permanently deleted.`,
-                          confirmLabel: 'Delete',
-                          onConfirm: async () => {
-                            await versioning.deleteDraft.mutateAsync(draft.id)
-                            if (draft.id === currentBoardId && live) onLoadBoard(live.id)
-                          },
-                        })
-                      }
-                      disabled={versioning.deleteDraft.isPending}
-                      className="rounded bg-red-100 px-3 py-1.5 text-sm text-red-700 hover:bg-red-200 disabled:opacity-50"
-                    >
-                      Delete
-                    </button>
-                  </>
-                )
-              )}
-            </div>
+            row(
+              draft,
+              canEdit ? (
+                <>
+                  <button
+                    onClick={() => setRenaming({ id: draft.id, name: draft.name })}
+                    className="rounded bg-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-300"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    onClick={() =>
+                      confirm({
+                        title: 'Promote this draft?',
+                        message: `"${draft.name}" becomes the live board.${
+                          live ? ' The current live board moves into history.' : ''
+                        }`,
+                        confirmLabel: 'Promote',
+                        onConfirm: async () => {
+                          await versioning.promoteDraft.mutateAsync(draft.id)
+                          onLoadBoard(draft.id)
+                        },
+                      })
+                    }
+                    disabled={versioning.promoteDraft.isPending}
+                    className="rounded bg-green-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                  >
+                    Promote
+                  </button>
+                  <button
+                    onClick={() =>
+                      confirm({
+                        title: 'Discard this draft?',
+                        message: `"${draft.name}" and every change in it will be permanently deleted.`,
+                        confirmLabel: 'Discard',
+                        onConfirm: async () => {
+                          await versioning.deleteDraft.mutateAsync(draft.id)
+                          if (draft.id === currentBoardId && live) onLoadBoard(live.id)
+                        },
+                      })
+                    }
+                    disabled={versioning.deleteDraft.isPending}
+                    className="rounded bg-red-100 px-3 py-1.5 text-sm text-red-700 hover:bg-red-200 disabled:opacity-50"
+                  >
+                    Discard
+                  </button>
+                </>
+              ) : null
+            )
           )}
         </div>
 
         {archived.length > 0 && (
           <div>
             <h3 className="mb-2 text-sm font-semibold text-gray-700">
-              Archived ({archived.length})
+              History ({archived.length})
             </h3>
             <div className="space-y-2">{archived.map((board) => row(board))}</div>
           </div>
         )}
       </div>
 
-      <PDFUpload wardId={wardId} onSuccess={onLoadBoard} />
+      <PDFUpload wardId={wardId} onSuccess={onLoadBoard} disabled={!canEdit} />
     </div>
   )
 }

@@ -36,7 +36,7 @@ function buildMap<T extends { id: string; origin_id: string | null }>(rows: T[])
  */
 export async function forkBoard(
   sourceBoardId: string,
-  options: { name: string; status?: 'draft'; isWorkingDraft?: boolean }
+  options: { name: string }
 ): Promise<ForkResult> {
   const sourceRes = await supabase
     .from('boards')
@@ -55,10 +55,9 @@ export async function forkBoard(
     .from('boards')
     .insert({
       ward_id: source.ward_id,
-      status: options.status ?? 'draft',
+      status: 'draft',
       name: options.name,
       parent_board_id: source.id,
-      is_working_draft: options.isWorkingDraft ?? false,
       created_by: userId,
     })
     .select()
@@ -141,6 +140,7 @@ export async function forkBoard(
             flagged: p.flagged,
             inactive_at: p.inactive_at,
             notes: p.notes,
+            source: p.source,
             origin_id: p.id,
           }))
         )

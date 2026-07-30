@@ -15,6 +15,7 @@ import { useBoardData } from '../hooks/useBoardData'
 import { useBoardActions } from '../hooks/useBoardActions'
 import { useBoardVersioning } from '../hooks/useBoardVersioning'
 import { useBoardSelection } from '../hooks/useBoardSelection'
+import { canEditWard, useWardRole } from '../hooks/useWardRole'
 import { useRealtimeSync } from '../hooks/useRealtimeSync'
 import { usePresence } from '../hooks/usePresence'
 import {
@@ -30,6 +31,7 @@ import { PDFUpload } from '../components/PDFUpload'
 import { Tabs } from '../components/Tabs'
 import { FilterBar } from '../components/FilterBar'
 import { Toast } from '../components/Toast'
+import { ThemeToggle } from '../components/ThemeToggle'
 import { ContextMenu, type ContextMenuState, type MenuItem } from '../components/ContextMenu'
 import { BoardTab } from '../components/tabs/BoardTab'
 import { AssignTab } from '../components/tabs/AssignTab'
@@ -61,6 +63,8 @@ export function BoardPage() {
 
   const { data: liveBoard, isLoading: boardLoading, error: boardError } = useBoard(wardId)
   const versioning = useBoardVersioning(wardId)
+  const { data: role, isLoading: roleLoading } = useWardRole(wardId)
+  const canEdit = canEditWard(role)
 
   const [tab, setTab] = useState<TabId>('board')
   const [filters, setFilters] = useState<BoardFilters>(emptyFilters)
@@ -69,20 +73,23 @@ export function BoardPage() {
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
 
   const boards = versioning.allBoards.data
-  const workingDraft = boards?.find((b) => b.is_working_draft) ?? null
+  const draft = boards?.find((b) => b.status === 'draft') ?? null
 
   // The board you last loaded wins, and survives refreshes. It falls back to the
-  // working draft, then the live board, then whatever exists — that's the path a
-  // ward takes before anything has been loaded by hand, and after the remembered
+  // draft, then the live board, then whatever exists — that's the path a ward
+  // takes before anything has been loaded by hand, and after the remembered
   // board has been promoted away or deleted.
   const { selected: selectedBoardId, select: setSelectedBoardId } = useBoardSelection(
     wardId,
     boards
   )
-  const defaultBoardId = workingDraft?.id || liveBoard?.id || boards?.[0]?.id || ''
+  // A viewer can't edit the draft, so the live board is the sensible landing
+  // place for them even when a draft exists.
+  const defaultBoardId =
+    (canEdit ? draft?.id : null) || liveBoard?.id || draft?.id || boards?.[0]?.id || ''
   const boardId = selectedBoardId || defaultBoardId
 
-  useRealtimeSync(boardId)
+  useRealtimeSync(boardId, wardId)
   const { activeUsers } = usePresence(boardId)
 
   const { data, isLoading: dataLoading } = useBoardData(boardId || undefined, wardId)
@@ -97,6 +104,7 @@ export function BoardPage() {
     boardId,
     board,
     index,
+    canEdit,
     onSwitchBoard: setSelectedBoardId,
   })
 
@@ -166,11 +174,14 @@ export function BoardPage() {
         )?.title
       : undefined
 
+    const holdsSomething = (index.byMember.get(member.id) || []).length > 0
+
     const items: MenuItem[] = [
       {
         kind: 'action',
         icon: '★',
         label: member.flagged ? 'Remove flag' : 'Flag this person',
+        disabled: !canEdit,
         onSelect: () => actions.toggleMemberFlag(member),
       },
     ]
@@ -202,7 +213,13 @@ export function BoardPage() {
     items.push({
       kind: 'action',
       icon: member.archived_at ? '↺' : '⊘',
-      label: member.archived_at ? 'Mark active' : 'Mark inactive',
+      // Somebody serving can't be marked inactive — release them first.
+      label: member.archived_at
+        ? 'Mark active'
+        : holdsSomething
+          ? 'Mark inactive (release them first)'
+          : 'Mark inactive',
+      disabled: !canEdit || (!member.archived_at && holdsSomething),
       onSelect: () => actions.toggleMemberActive(member),
     })
 
@@ -224,13 +241,20 @@ export function BoardPage() {
         kind: 'action',
         icon: '★',
         label: position.flagged ? 'Remove flag' : 'Flag this calling',
+        disabled: actions.editor.isReadOnly,
         onSelect: () => actions.togglePositionFlag(position),
       },
       {
         kind: 'action',
         icon: position.inactive_at ? '↺' : '⊘',
-        label: position.inactive_at ? 'Mark active' : 'Mark inactive',
-        disabled: actions.editor.isReadOnly,
+        // Only a vacant calling can be parked.
+        label: position.inactive_at
+          ? 'Mark active'
+          : occupants.length > 0
+            ? 'Mark inactive (release them first)'
+            : 'Mark inactive',
+        disabled:
+          actions.editor.isReadOnly || (!position.inactive_at && occupants.length > 0),
         onSelect: () => actions.togglePositionActive(position),
       },
     ]
@@ -310,7 +334,7 @@ export function BoardPage() {
 
   if (!wardId) return <div className="py-8 text-center">Ward not found</div>
 
-  if (boardLoading || versioning.allBoards.isLoading) {
+  if (boardLoading || roleLoading || versioning.allBoards.isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="text-gray-600">Loading board…</div>
@@ -349,12 +373,17 @@ export function BoardPage() {
             )}
             {board?.status === 'draft' && (
               <span className="rounded bg-yellow-100 px-2 py-1 text-xs font-medium text-yellow-800">
-                {board.is_working_draft ? 'Working draft' : 'Draft'}
+                Draft
               </span>
             )}
             {board?.status === 'archived' && (
               <span className="rounded bg-gray-200 px-2 py-1 text-xs font-medium text-gray-600">
                 Archived · read-only
+              </span>
+            )}
+            {!canEdit && (
+              <span className="rounded bg-slate-200 px-2 py-1 text-xs font-medium text-slate-700">
+                View only
               </span>
             )}
             {activeUsers.length > 0 && <ActiveUsers activeUsers={activeUsers} />}
@@ -403,6 +432,7 @@ export function BoardPage() {
           >
             Sign Out
           </button>
+          <ThemeToggle className="bg-gray-200" />
         </div>
       </div>
     </header>
@@ -417,11 +447,12 @@ export function BoardPage() {
           <div className="rounded-lg bg-white p-8 text-center shadow">
             <h2 className="text-lg font-semibold text-gray-900">No board yet</h2>
             <p className="mt-2 text-sm text-gray-600">
-              Import the "Organizations and Callings" report from LCR to build this ward's first
-              board. It comes in as a draft you can review before promoting it.
+              {canEdit
+                ? 'Import the "Organizations and Callings" report from LCR to build this ward\'s first board. It comes in as a draft you can review before promoting it.'
+                : 'Nobody has built this ward\'s board yet. A ward admin needs to import the "Organizations and Callings" report from LCR.'}
             </p>
           </div>
-          <PDFUpload wardId={wardId} onSuccess={loadBoard} />
+          <PDFUpload wardId={wardId} onSuccess={loadBoard} disabled={!canEdit} />
         </main>
       </div>
     )
@@ -513,6 +544,7 @@ export function BoardPage() {
                   <BoardsTab
                     wardId={wardId}
                     currentBoardId={boardId}
+                    canEdit={canEdit}
                     onLoadBoard={loadBoard}
                     confirm={setConfirmRequest}
                   />

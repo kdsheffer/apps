@@ -5,13 +5,17 @@ export interface Ward {
   created_by: string
 }
 
+/**
+ * A ward has at most one `draft` — the editable board — one `promoted` board
+ * that everyone reads, and a history of `archived` boards it promoted before.
+ * The one-draft rule is a partial unique index, not just a convention.
+ */
 export interface Board {
   id: string
   ward_id: string
   status: 'promoted' | 'draft' | 'archived'
   name: string
   parent_board_id: string | null
-  is_working_draft: boolean
   created_by: string
   created_at: string
   promoted_at: string | null
@@ -34,9 +38,16 @@ export interface Position {
   title: string
   sort_order: number
   flagged: boolean
+  /** Non-null means the seat is parked. Only a vacant calling can be inactive. */
   inactive_at: string | null
   notes: string | null
   origin_id: string | null
+  /**
+   * Where the calling came from. An LCR import manages its own callings — if
+   * one drops out of the report, whoever held it was released — but never
+   * touches a `manual` calling somebody added by hand.
+   */
+  source: 'import' | 'manual'
   created_at: string
 }
 
@@ -73,7 +84,25 @@ export interface Profile {
   id: string
   created_at: string
   is_super_admin: boolean
+  /** Mirrored from auth.users by a trigger — auth.users isn't client-readable. */
+  email: string | null
+  full_name: string | null
 }
+
+/** Ward-scoped access. Site-wide access is `Profile.is_super_admin` instead. */
+export type WardRoleName = 'admin' | 'viewer'
+
+export interface WardRole {
+  id: string
+  ward_id: string
+  user_id: string
+  role: WardRoleName
+  granted_by: string
+  granted_at: string
+}
+
+/** What the signed-in user may do in one ward, once both grants are resolved. */
+export type EffectiveRole = 'super_admin' | 'admin' | 'viewer' | 'none'
 
 /** A top-level organization with its own callings and its subgroups. */
 export interface GroupNode {

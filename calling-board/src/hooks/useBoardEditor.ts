@@ -21,18 +21,20 @@ interface Options {
   wardId: string
   boardId: string
   board: Board | null | undefined
+  /** False for a ward viewer, who may look but not touch. */
+  canEdit: boolean
   onSwitchBoard: (boardId: string) => void
 }
 
 /**
  * Makes promoted boards immutable. Any edit attempted while viewing the live
- * board is transparently redirected into the ward's working draft — created on
- * the first edit, reused by every edit after that — and the view follows it.
+ * board is transparently redirected into the ward's one draft — created on the
+ * first edit, reused by every edit after that — and the view follows it.
  *
- * Archived boards are read-only with no redirect; there's nothing sensible to
- * fork them into while a working draft already belongs to the live board.
+ * Archived boards are read-only with no redirect: they're history, and the
+ * ward's draft already belongs to the live board.
  */
-export function useBoardEditor({ wardId, boardId, board, onSwitchBoard }: Options) {
+export function useBoardEditor({ wardId, boardId, board, canEdit, onSwitchBoard }: Options) {
   const queryClient = useQueryClient()
   const [forking, setForking] = useState(false)
   const [lastForkedTo, setLastForkedTo] = useState<string | null>(null)
@@ -41,11 +43,14 @@ export function useBoardEditor({ wardId, boardId, board, onSwitchBoard }: Option
 
   const isLive = board?.status === 'promoted'
   const isArchived = board?.status === 'archived'
-  const isReadOnly = isArchived
+  const isReadOnly = isArchived || !canEdit
 
   const resolve = useCallback(async (): Promise<EditContext> => {
+    if (!canEdit) {
+      throw new Error('You have view-only access to this ward.')
+    }
     if (isArchived) {
-      throw new Error('Archived boards are read-only. Load a draft to make changes.')
+      throw new Error('Archived boards are read-only. Load the draft to make changes.')
     }
 
     if (!isLive || !board) {
@@ -56,7 +61,7 @@ export function useBoardEditor({ wardId, boardId, board, onSwitchBoard }: Option
       .from('boards')
       .select('*')
       .eq('ward_id', wardId)
-      .eq('is_working_draft', true)
+      .eq('status', 'draft')
       .maybeSingle()
 
     if (existingRes.error) throw existingRes.error
@@ -83,17 +88,14 @@ export function useBoardEditor({ wardId, boardId, board, onSwitchBoard }: Option
       }
     }
 
-    const { board: draft, ids } = await forkBoard(board.id, {
-      name: WORKING_DRAFT_NAME,
-      isWorkingDraft: true,
-    })
+    const { board: draft, ids } = await forkBoard(board.id, { name: WORKING_DRAFT_NAME })
 
     return {
       boardId: draft.id,
       id: strict([ids.groups, ids.positions, ids.assignments]),
       redirected: true,
     }
-  }, [board, boardId, isArchived, isLive, wardId])
+  }, [board, boardId, canEdit, isArchived, isLive, wardId])
 
   /**
    * Runs an edit against the correct board. Wrap every mutation in this — the
@@ -102,7 +104,7 @@ export function useBoardEditor({ wardId, boardId, board, onSwitchBoard }: Option
   const edit = useCallback(
     async <T,>(run: (ctx: EditContext) => Promise<T>): Promise<T> => {
       if (!inFlight.current) {
-        setForking(isLive)
+        setForking(isLive && canEdit)
         inFlight.current = resolve().finally(() => {
           inFlight.current = null
           setForking(false)
@@ -114,14 +116,14 @@ export function useBoardEditor({ wardId, boardId, board, onSwitchBoard }: Option
 
       if (ctx.redirected) {
         queryClient.invalidateQueries({ queryKey: ['boards', wardId] })
-        queryClient.invalidateQueries({ queryKey: ['drafts', wardId] })
+        queryClient.invalidateQueries({ queryKey: ['draft', wardId] })
         setLastForkedTo(ctx.boardId)
         onSwitchBoard(ctx.boardId)
       }
 
       return result
     },
-    [isLive, onSwitchBoard, queryClient, resolve, wardId]
+    [canEdit, isLive, onSwitchBoard, queryClient, resolve, wardId]
   )
 
   return {

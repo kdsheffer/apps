@@ -6,16 +6,21 @@ can work through changes in a draft and publish when you're ready.
 
 ## Features
 
-- **Board versioning** — one promoted (live) board plus editable drafts. Promoting a
-  draft archives the old live board and clears the other drafts.
+- **Board versioning** — one live board, one editable draft, and a history of the
+  boards that used to be live. Promoting the draft makes it live and files the old
+  live board under history.
+- **Roles** — system admin (everything, everywhere), ward admin (edit one ward), ward
+  viewer (read one ward). Granted from the Admin console and enforced by row-level
+  security, not just by hidden buttons.
 - **Organizations and subgroups** — callings nest the way the ward does: Elders Quorum
   contains its Presidency, Teachers, Ministering, Activities, and Service.
 - **Flexible assignment** — a calling can hold several people (co-teachers, advisers)
   and a person can hold several callings.
 - **Time in calling** — each assignment shows how long it's been held (`1y4m`), from an
   editable sustained date.
-- **LCR PDF import** — upload the "Organizations and Callings" report and get a draft
-  board with organizations, callings, vacancies, and members already filled in.
+- **LCR PDF import that merges** — re-import the "Organizations and Callings" report as
+  often as you like. Flags, notes, parked callings and hand-added callings survive;
+  what comes across is who holds which calling.
 - **Realtime sync** — changes appear live for everyone on the board, with presence
   showing who else is viewing it.
 - **Multi-ward** — wards are isolated from each other by row-level security.
@@ -35,14 +40,17 @@ npm install
 
 ### 2. Create a Supabase project
 
-Create a project at [supabase.com](https://supabase.com), then run the migrations in
-`supabase/migrations/` in order (001 → 006) via the SQL editor or the Supabase CLI:
+Create a project at [supabase.com](https://supabase.com), then run every file in
+`supabase/migrations/` in order via the SQL editor or the Supabase CLI:
 
 ```bash
 supabase db push
 ```
 
 Migrations `004` and `005` seed test data — skip them for a real ward.
+
+The migrations are covered by tests that run them against a throwaway Postgres and
+check the policies and triggers actually behave. See **Scripts** below.
 
 ### 3. Configure environment
 
@@ -66,7 +74,13 @@ Sign in once so a `profiles` row is created, then promote yourself in the SQL ed
 update profiles set is_super_admin = true where id = '<your-auth-user-id>';
 ```
 
-Super admins can create wards and grant ward-admin access from the Admin page.
+From then on the Admin console handles access: **/admin → People** lists everyone who
+has signed in, toggles system admin, and grants each person Ward Admin or Ward Viewer
+on any ward. There's no invite flow — somebody has to sign in once before they can be
+granted anything.
+
+You can't remove your own system admin access. That's deliberate: it's what stops the
+last admin locking everyone out of the console.
 
 ### 5. Run
 
@@ -82,17 +96,36 @@ The app runs at `http://localhost:5173`.
 
 1. In LCR, open **Reports → Organizations and Callings** and save it as a PDF.
    It must be a real PDF export — a scan or a print-to-image won't parse.
-2. On the board page, choose the file under **Import from LCR PDF** and import.
-3. The import creates a *draft* board. Review it, make any corrections, then
-   promote it to live.
+2. On the **Boards** tab, pick what to **merge into** — normally the draft you've been
+   working on — then choose the file and import.
+3. Review the summary, make any corrections, and promote the draft to live.
 
-Importing never touches the live board, so it's safe to re-run.
+Importing never touches the live board, so it's always safe to re-run.
 
-### Working with drafts
+### What a re-import does and doesn't change
 
-Create a draft from the live board, edit freely, and promote when it's ready.
-Promoting archives the previous live board and deletes the other outstanding
-drafts, so coordinate before promoting if others are mid-edit.
+The report is merged into your draft rather than replacing it:
+
+| | |
+| --- | --- |
+| Kept | Flags, notes, parked (inactive) callings, called dates, and callings you added by hand |
+| Updated | Who holds each LCR calling — people in the report are called, people who've dropped out of it are released |
+| Added | New organizations, callings and members the report introduces |
+| Reported, never done for you | Callings that have left the report (emptied but kept), and members the report didn't mention at all |
+
+Two rules the database enforces, whichever way you come at them: only a **vacant**
+calling can be marked inactive, and an **inactive member can't hold a calling**. If the
+report fills a parked calling, the calling goes active; if it calls somebody marked
+inactive, they go active.
+
+Callings you add by hand are tagged as yours and are never touched by an import — LCR
+doesn't know about them, so it gets no opinion about them.
+
+### Working with the draft
+
+A ward has one draft. Editing the live board opens it automatically and redirects the
+change into it. Promote when it's ready — that makes the draft live and moves the old
+live board into history.
 
 ## How the PDF parser works
 
@@ -116,13 +149,58 @@ every name in the ward would be imported as a calling.
 
 If LCR changes the report's layout, this is the file to revisit.
 
+## How realtime sync works
+
+Two settings have to be right before a single change event exists, and both fail
+silently — a subscription that receives nothing looks exactly like a quiet board.
+Migration `010` handles them:
+
+- The tables have to be **in the `supabase_realtime` publication**. Outside it, Postgres
+  publishes no changes at all.
+- They need **`REPLICA IDENTITY FULL`**. On Postgres's default, a `DELETE` writes only the
+  primary key, and Realtime matches subscription filters against the row in the payload —
+  so `board_id=eq.<board>` can never match a delete, and the event is dropped. Deleting a
+  calling used to sync to nobody.
+
+On top of that, Realtime's filter grammar compares one column to a literal. There are no
+joins, so "positions belonging to this board" can't be expressed — a position knows its
+group, and only the group knows its board. `useRealtimeSync` therefore filters what it can
+server-side (`groups.board_id`, `members.ward_id`) and matches the rest against the ids
+already in the query cache (`src/lib/realtimeRelevance.ts`). When a payload can't be
+identified, it refetches rather than risk dropping the change.
+
 ## Scripts
 
 ```bash
 npm run dev      # dev server
 npm run build    # typecheck and build to dist/
 npm run preview  # serve the production build
+npm test         # merge rules (pure unit tests, no database)
 ```
+
+### Testing the migrations
+
+`supabase/tests/` runs every migration against a throwaway Postgres and asserts what
+the policies and triggers actually do — that a viewer can't write, that a ward admin
+can't reach another ward, that an occupied calling can't be parked. It needs a local
+Postgres binary, which is deliberately not an app dependency:
+
+```bash
+npm i embedded-postgres pg --prefix /tmp/pgtest
+PG_TEST_MODULES=/tmp/pgtest npm run test:db
+```
+
+### Testing the merge against a real report
+
+Unit tests only cover the cases somebody thought of. This runs the real parser and the
+real planner over an actual LCR export, applies the plan, and re-merges — the property
+that has to hold is that importing a report twice changes nothing the second time:
+
+```bash
+npm run verify:merge -- "path/to/Organizations and Callings.pdf"
+```
+
+Pass a second PDF to check merging across two different exports.
 
 ## Deployment
 
