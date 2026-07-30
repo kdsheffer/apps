@@ -130,10 +130,16 @@ function OpenPositionRow({
   position,
   path,
   ctx,
+  subgroupId,
+  expanded,
+  onToggleExpanded,
 }: {
   position: Position
   path: string
   ctx: BoardViewContext
+  subgroupId: string | null
+  expanded: boolean
+  onToggleExpanded: () => void
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: dropId({ type: 'position', positionId: position.id }),
@@ -146,6 +152,21 @@ function OpenPositionRow({
     .map((o) => o.member?.full_name)
     .filter(Boolean)
     .join(', ')
+
+  const otherInSubgroup = subgroupId
+    ? (ctx.data?.positions || [])
+        .filter((p) => p.group_id === subgroupId && p.id !== position.id)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((p) => {
+          const assignments = ctx.index.byPosition.get(p.id) || []
+          const names = assignments
+            .map((a) => a.member?.full_name)
+            .filter(Boolean)
+            .join(', ')
+          return { position: p, names }
+        })
+        .filter((item) => item.names)
+    : []
 
   return (
     <li
@@ -172,6 +193,15 @@ function OpenPositionRow({
         >
           ★
         </button>
+        {otherInSubgroup.length > 0 && (
+          <button
+            onClick={onToggleExpanded}
+            title={expanded ? 'Collapse' : 'Show team members'}
+            className="shrink-0 text-gray-400 hover:text-gray-600"
+          >
+            {expanded ? '▼' : '▶'}
+          </button>
+        )}
         {/* Long calling names get cut off next to the assign box, so every line
             here hands the full text back on hover. */}
         <div className="min-w-0 flex-1">
@@ -198,6 +228,20 @@ function OpenPositionRow({
       {position.notes && (
         <TruncatedText text={position.notes} className="mt-1 text-xs italic text-amber-800" />
       )}
+      {expanded && otherInSubgroup.length > 0 && (
+        <div className="mt-2 border-t border-gray-100 pt-2">
+          <div className="space-y-1">
+            {otherInSubgroup.map((item) => (
+              <div key={item.position.id} className="text-xs text-gray-600">
+                <TruncatedText
+                  text={`${item.position.title}: ${item.names || '(open)'}`}
+                  className="text-xs text-gray-600"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </li>
   )
 }
@@ -213,6 +257,7 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
   const [allMembers, setAllMembers] = useState(false)
   const [flaggedCallings, setFlaggedCallings] = useState(false)
   const [flaggedMembers, setFlaggedMembers] = useState(false)
+  const [expandedPositions, setExpandedPositions] = useState<Set<string>>(new Set())
   const panes = usePaneHeight()
 
   const callingFilters = {
@@ -221,6 +266,34 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
     // Handled per panel below, so the position's own flag is what counts here
     // rather than the shared rule that also matches a flagged occupant.
     flaggedOnly: false,
+  }
+
+  const toggleExpanded = (positionId: string) => {
+    setExpandedPositions((prev) => {
+      const next = new Set(prev)
+      if (next.has(positionId)) {
+        next.delete(positionId)
+      } else {
+        next.add(positionId)
+      }
+      return next
+    })
+  }
+
+  const toggleAllExpanded = () => {
+    const allPositionIds = new Set<string>()
+    sections.forEach((section) => {
+      section.positions.forEach((p) => allPositionIds.add(p.id))
+      section.subgroups.forEach((sub) => {
+        sub.positions.forEach((p) => allPositionIds.add(p.id))
+      })
+    })
+    const anyExpanded = [...allPositionIds].some((id) => expandedPositions.has(id))
+    if (anyExpanded) {
+      setExpandedPositions(new Set())
+    } else {
+      setExpandedPositions(allPositionIds)
+    }
   }
 
   const sections = (data?.groups || [])
@@ -290,6 +363,13 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
             {showAll ? 'All callings' : 'Open callings'}
           </h2>
           <div className="flex items-center gap-2 print:hidden">
+            <button
+              onClick={toggleAllExpanded}
+              title="Toggle all team member details"
+              className="rounded border border-gray-300 px-2 py-1 text-sm text-gray-600 hover:bg-gray-50"
+            >
+              {expandedPositions.size > 0 ? '▼' : '▶'}
+            </button>
             <ScopeToggle all={showAll} onChange={setShowAll} labels={['Open', 'All']} />
             <FlagFilter
               active={flaggedCallings}
@@ -325,6 +405,9 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
                         position={position}
                         path={section.group.name}
                         ctx={ctx}
+                        subgroupId={null}
+                        expanded={expandedPositions.has(position.id)}
+                        onToggleExpanded={() => toggleExpanded(position.id)}
                       />
                     ))}
                   </ul>
@@ -342,6 +425,9 @@ export function AssignTab({ ctx }: { ctx: BoardViewContext }) {
                           position={position}
                           path={`${section.group.name} › ${sub.group.name}`}
                           ctx={ctx}
+                          subgroupId={sub.group.id}
+                          expanded={expandedPositions.has(position.id)}
+                          onToggleExpanded={() => toggleExpanded(position.id)}
                         />
                       ))}
                     </ul>
