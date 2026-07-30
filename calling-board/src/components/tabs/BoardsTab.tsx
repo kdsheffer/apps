@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useBoardVersioning } from '../../hooks/useBoardVersioning'
+import { useBoardData } from '../../hooks/useBoardData'
 import { PDFUpload } from '../PDFUpload'
+import { ChangeModal } from '../ChangeModal'
 import type { Board } from '../../types'
 import type { ConfirmRequest } from './shared'
 
@@ -43,12 +45,21 @@ export function BoardsTab({
 }: BoardsTabProps) {
   const versioning = useBoardVersioning(wardId)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null)
+  const [viewingChanges, setViewingChanges] = useState<{
+    board: Board
+    beforeBoardId?: string
+    afterBoardId: string
+  } | null>(null)
 
   const live = versioning.promotedBoard.data ?? null
   const draft = versioning.draft.data ?? null
   const archived = (versioning.allBoards.data || []).filter((b) => b.status === 'archived')
 
-  const row = (board: Board, extra?: React.ReactNode) => {
+  // Fetch data for the change modal
+  const { data: beforeData } = useBoardData(viewingChanges?.beforeBoardId, wardId)
+  const { data: afterData } = useBoardData(viewingChanges?.afterBoardId, wardId)
+
+  const row = (board: Board, extra?: React.ReactNode, comparisonBoardId?: string) => {
     const isCurrent = board.id === currentBoardId
 
     return (
@@ -111,6 +122,20 @@ export function BoardsTab({
           >
             {isCurrent ? 'Loaded' : 'Load'}
           </button>
+          {comparisonBoardId && (
+            <button
+              onClick={() =>
+                setViewingChanges({
+                  board,
+                  beforeBoardId: comparisonBoardId,
+                  afterBoardId: board.id,
+                })
+              }
+              className="rounded bg-gray-200 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-300"
+            >
+              Changes
+            </button>
+          )}
           {extra}
         </div>
       </div>
@@ -143,7 +168,7 @@ export function BoardsTab({
         {live && (
           <div className="mb-5">
             <h3 className="mb-2 text-sm font-semibold text-gray-700">Live</h3>
-            {row(live)}
+            {row(live, undefined)}
           </div>
         )}
 
@@ -201,7 +226,8 @@ export function BoardsTab({
                     Discard
                   </button>
                 </>
-              ) : null
+              ) : null,
+              live?.id
             )
           )}
         </div>
@@ -211,10 +237,24 @@ export function BoardsTab({
             <h3 className="mb-2 text-sm font-semibold text-gray-700">
               History ({archived.length})
             </h3>
-            <div className="space-y-2">{archived.map((board) => row(board))}</div>
+            <div className="space-y-2">
+              {archived.map((board, idx) => {
+                const previousBoard = idx === 0 ? live : archived[idx - 1]
+                return row(board, undefined, previousBoard?.id)
+              })}
+            </div>
           </div>
         )}
       </div>
+
+      {viewingChanges && (
+        <ChangeModal
+          board={viewingChanges.board}
+          beforeData={beforeData}
+          afterData={afterData}
+          onClose={() => setViewingChanges(null)}
+        />
+      )}
 
       <PDFUpload wardId={wardId} onSuccess={onLoadBoard} disabled={!canEdit} />
     </div>

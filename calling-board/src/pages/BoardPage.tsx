@@ -37,11 +37,12 @@ import { BoardTab } from '../components/tabs/BoardTab'
 import { AssignTab } from '../components/tabs/AssignTab'
 import { MembersTab } from '../components/tabs/MembersTab'
 import { BoardsTab } from '../components/tabs/BoardsTab'
+import { ProposedTab } from '../components/tabs/ProposedTab'
 import type { BoardViewContext, ConfirmRequest } from '../components/tabs/shared'
 import type { DragData, DropData } from '../lib/dnd'
 import { emptyFilters, type BoardFilters, type Member, type Position } from '../types'
 
-type TabId = 'board' | 'assign' | 'members' | 'boards'
+type TabId = 'board' | 'assign' | 'members' | 'boards' | 'proposed'
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform)
 const modifierKey = isMac ? '⌘' : 'Ctrl+'
@@ -93,6 +94,9 @@ export function BoardPage() {
   const { activeUsers } = usePresence(boardId)
 
   const { data, isLoading: dataLoading } = useBoardData(boardId || undefined, wardId)
+  // For Proposed tab: fetch the promoted board to compare against draft
+  const promotedBoard = boards?.find((b) => b.status === 'promoted')
+  const { data: promotedData } = useBoardData(promotedBoard?.id || undefined, wardId)
   const board = boards?.find((b) => b.id === boardId) ?? null
 
   const index = useMemo(() => buildIndex(data), [data])
@@ -509,6 +513,7 @@ export function BoardPage() {
               { id: 'board', label: 'Board' },
               { id: 'assign', label: 'Assign', badge: stats.open },
               { id: 'members', label: 'Members', badge: stats.members },
+              ...(board?.status === 'draft' ? [{ id: 'proposed' as const, label: 'Proposed' }] : []),
               { id: 'boards', label: 'Boards' },
             ]}
             active={tab}
@@ -516,7 +521,7 @@ export function BoardPage() {
           />
 
           <div className="pt-4">
-            {tab !== 'boards' && (
+            {tab !== 'boards' && tab !== 'proposed' && (
               <FilterBar
                 filters={filters}
                 onChange={setFilters}
@@ -540,6 +545,7 @@ export function BoardPage() {
                 {tab === 'board' && <BoardTab ctx={ctx} boardId={boardId} />}
                 {tab === 'assign' && <AssignTab ctx={ctx} />}
                 {tab === 'members' && <MembersTab ctx={ctx} />}
+                {tab === 'proposed' && <ProposedTab ctx={ctx} promotedBoardData={promotedData} />}
                 {tab === 'boards' && (
                   <BoardsTab
                     wardId={wardId}
