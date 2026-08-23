@@ -9,7 +9,7 @@ import { Alert, Card, PageShell } from '../components/PageShell'
 /**
  * The page the cancel link in every message points at.
  *
- * This replaced a form that took a family name and a phone number and told you
+ * This replaced a form that took a name and a phone number and told you
  * whether they matched a booking — which was, unavoidably, a way to find out
  * whether a number was booked. The token in this URL is a UUID nobody can
  * guess, and it reaches only the person who booked, so the capability goes to
@@ -62,8 +62,8 @@ export function CancelPage() {
       <PageShell title="Cancelled" subtitle={appt.ward_name}>
         <Card>
           <p className="text-gray-700">
-            The {appt.family_name} family's appointment on {when} is cancelled,
-            and the time is open for somebody else.
+            The appointment for {appt.family_name} on {when} is cancelled, and
+            the time is open for somebody else.
           </p>
           <Link
             to={`/w/${appt.ward_slug}`}
@@ -80,9 +80,7 @@ export function CancelPage() {
     <PageShell title="Your appointment" subtitle={appt.ward_name}>
       <div className="space-y-6">
         <Card>
-          <p className="text-sm uppercase tracking-wide text-gray-500">
-            {appt.family_name} family
-          </p>
+          <p className="text-sm uppercase tracking-wide text-gray-500">{appt.family_name}</p>
           <p className="mt-1 text-2xl font-bold text-gray-900">{when}</p>
           <p className="mt-1 text-gray-600">{appt.location ?? 'At the meetinghouse'}</p>
 

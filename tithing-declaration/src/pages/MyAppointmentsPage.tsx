@@ -72,7 +72,7 @@ function MyAppointmentCard({ appointment }: { appointment: Row }) {
   return (
     <Card>
       <p className="text-sm uppercase tracking-wide text-gray-500">
-        {appointment.family_name} family
+        {appointment.family_name}
       </p>
       <p className="mt-1 text-xl font-bold text-gray-900">
         {appointment.slot ? formatSlot(appointment.slot.starts_at, timezone) : 'Time unavailable'}

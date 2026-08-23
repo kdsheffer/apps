@@ -176,13 +176,13 @@ test('the schedule', async (t) => {
 
     assert.match(
       await errorFrom(() => client.query('delete from public.slots where id = $1', [slot.id])),
-      /Whitmer family is booked/
+      /Whitmer is booked/
     )
     assert.match(
       await errorFrom(() =>
         client.query('update public.slots set blocked_at = now() where id = $1', [slot.id])
       ),
-      /Whitmer family is booked/
+      /Whitmer is booked/
     )
     assert.match(
       await errorFrom(() =>
@@ -268,7 +268,7 @@ test('removing a day people have booked', async (t) => {
       'pratt@example.test', 'sheffer@example.test', 'snow@example.test',
     ])
     assert.match(rows[0].body, /has been cancelled/)
-    assert.match(rows[0].body, /Pratt family/)
+    assert.match(rows[0].body, /for Pratt/)
     assert.equal(rows[0].appointment_id, null, 'the appointment cascaded away, the message did not')
   })
 

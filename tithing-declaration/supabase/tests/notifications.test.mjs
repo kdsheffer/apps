@@ -34,7 +34,7 @@ test('notifications', async (t) => {
     assert.equal(rows[0].to_address, 'richards@example.test')
     assert.equal(rows[0].status, 'queued')
     assert.match(rows[0].subject, /Tithing declaration confirmed/)
-    assert.match(rows[0].body, /Richards family,/)
+    assert.match(rows[0].body, /Hello Richards,/)
     assert.match(rows[0].body, /\/cancel\/[0-9a-f-]{36}/)
     assert.match(rows[0].body, /Bishop's office/)
     // Real newlines, not the characters backslash and n.

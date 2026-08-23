@@ -115,7 +115,7 @@ export function BookingPage() {
       ) : (
         <div className="space-y-6">
           <p className="text-sm text-gray-600">
-            Pick a time that works for your family. Each appointment is 15 minutes.
+            Pick a time that works for you. Each appointment is 15 minutes.
           </p>
           {days.map((day) => (
             <Card key={day.dayId}>
@@ -180,11 +180,11 @@ function BookingForm({
   const [notes, setNotes] = useState('')
   const [touched, setTouched] = useState(false)
 
-  const nameError = familyName.trim().length < 2 ? 'Please enter your family name.' : null
+  const nameError = familyName.trim().length < 2 ? 'Please enter a name.' : null
   const phoneError = !isPlausiblePhone(phone) ? 'Please enter a phone number we can reach you on.' : null
   /* Required, not optional. It carries the appointment details, the reminder
      the day before, and the link that cancels — without one this booking is a
-     dead end the family can't get back to. Anyone without email rings the
+     dead end they can't get back to. Anyone without email rings the
      clerk, who can add them by hand. */
   const emailError = !email.trim()
     ? 'We need an email address to send your appointment details and reminder.'
@@ -231,10 +231,10 @@ function BookingForm({
 
         <Field
           id="family-name"
-          label="Family name"
+          label="Name"
           required
           error={touched ? nameError : null}
-          hint="However your family is usually addressed — this is what the bishopric will see."
+          hint="Your name, or your household's — whatever the bishopric should see on the schedule."
         >
           <input
             id="family-name"

@@ -1,7 +1,7 @@
 # Tithing Declaration
 
 Scheduling for tithing declaration appointments. Members open a link, pick a
-time, and give a family name and a phone number — no account, no sign-in. The
+time, and give a name and a phone number — no account, no sign-in. The
 executive secretary builds the schedule, sees who's coming, adds people who
 phoned in, and sends reminders.
 
@@ -32,8 +32,7 @@ it to anybody who can type.
 ## Features
 
 - **Public booking** — one link per ward (`/w/riverbend-3rd`). Pick a time, give
-  a family name, phone number and email, and the details arrive by email. No
-  account.
+  a name, phone number and email, and the details arrive by email. No account.
 - **Cancel from the email** — every confirmation and reminder carries a link
   that cancels. The token in it is a UUID nobody can guess, so the capability
   goes to the person who booked rather than being offered to anyone who can
@@ -158,15 +157,30 @@ These hold however you come at them, from the app or from the SQL editor:
 | `appointments.ward_id` comes from the slot | Not from what the client sent, so a slot id from one ward can't be booked through another |
 | A member can cancel their booking, not rewrite it | A trigger, not a column grant — the rule depends on *who* is asking, and the secretary and the member are both `authenticated` |
 
+### On the word "name"
+
+The field is **Name**, not "family name", and no message addresses anybody as
+"the Sheffer family". Plenty of members declaring tithing are not a family — a
+single adult, a widow, a missionary, a household of one — and being called one
+by a form is a small thing that happens every single time.
+
+A household still types "Sheffer" and an individual types their own name. What
+changed is that the app stopped asserting which it was looking at.
+
+The `appointments.family_name` column keeps its name. It is an internal
+identifier no member ever sees, and renaming it would touch every function
+signature, the client and the tests for no observable behaviour — the column
+carries a comment saying so, in case the mismatch looks like an oversight.
+
 ### What the public form requires, and what the secretary doesn't
 
-A member booking themselves must give a family name, a phone number **and an
-email address**. The email isn't a nicety: it carries their appointment details,
+A member booking themselves must give a name, a phone number **and an email
+address**. The email isn't a nicety: it carries their appointment details,
 their reminder, and the only link that lets them cancel. Without one the booking
 is a dead end they can't get back to.
 
-The secretary is under none of that. **Add someone** on a slot takes a family
-name alone — phone and email optional — because "the Wilsons rang, put them down
+The secretary is under none of that. **Add someone** on a slot takes a name
+alone — phone and email optional — because "the Wilsons rang, put them down
 for 6:15" is a real thing and losing the booking over a missing number helps
 nobody. A booking with no contact details simply gets no messages; one with an
 email gets the same confirmation and reminder as anyone else. Bookings can also

@@ -232,7 +232,7 @@ export function DayPage() {
             {booked.length === 0
               ? 'Removes the day and all its times. Nobody is booked, so nobody is affected.'
               : `Removes the day and all its times. The ${booked.length} ${
-                  booked.length === 1 ? 'family' : 'families'
+                  booked.length === 1 ? 'person' : 'people'
                 } booked on it will have their appointments cancelled, and anyone who left an email address will be told.`}
           </p>
           <button
@@ -268,7 +268,7 @@ export function DayPage() {
         message={
           booked.length === 0
             ? `${formatServiceDate(day.service_date)} and its ${slots?.length ?? 0} times will be removed.`
-            : `${booked.length} ${booked.length === 1 ? 'family is' : 'families are'} booked on ${formatServiceDate(day.service_date)}. ` +
+            : `${booked.length} ${booked.length === 1 ? 'person is' : 'people are'} booked on ${formatServiceDate(day.service_date)}. ` +
               `Their appointments will be cancelled and everyone who left an email address will be told. This can't be undone.`
         }
         confirmLabel={booked.length === 0 ? 'Remove day' : `Cancel ${booked.length} and remove`}
@@ -438,8 +438,8 @@ function SlotRow({
         message={
           appointment
             ? appointment.email
-              ? `The ${appointment.family_name} family will be emailed at ${appointment.email} to let them know, and the time goes back on the schedule.`
-              : `The ${appointment.family_name} family left no email address, so nobody will be told automatically — you may want to ring them. The time goes back on the schedule.`
+              ? `${appointment.family_name} will be emailed at ${appointment.email} to let them know, and the time goes back on the schedule.`
+              : `${appointment.family_name} left no email address, so nobody will be told automatically — you may want to ring them. The time goes back on the schedule.`
             : ''
         }
         confirmLabel="Cancel booking"
@@ -465,12 +465,12 @@ function SlotRow({
 /**
  * The secretary's entry form, for somebody who rang up or walked in.
  *
- * A family name on its own is a complete booking. Phone and email are offered
- * because they're useful — an email means the family gets the same confirmation
- * and reminder as anyone who booked themselves — but neither is required, and
- * a booking with neither simply gets no messages. That's a routine outcome
- * here, unlike on the public form where a member with no email would have no
- * way back to their own appointment.
+ * A name on its own is a complete booking. Phone and email are offered because
+ * they're useful — an email means they get the same confirmation and reminder
+ * as anyone who booked themselves — but neither is required, and a booking with
+ * neither simply gets no messages. That's a routine outcome here, unlike on the
+ * public form where somebody with no email would have no way back to their own
+ * appointment.
  */
 function AppointmentForm({
   slotId,
@@ -498,7 +498,7 @@ function AppointmentForm({
     event.preventDefault()
     setError(null)
 
-    if (familyName.trim().length < 2) return setError('Enter a family name.')
+    if (familyName.trim().length < 2) return setError('Enter a name.')
     // Only checked when given — blank is the ordinary case.
     if (phone.trim() && !isPlausiblePhone(phone)) return setError('That phone number looks wrong.')
     if (email.trim() && !isPlausibleEmail(email)) return setError('That email address looks wrong.')
@@ -529,7 +529,7 @@ function AppointmentForm({
     >
       {error && <p className="mb-3 text-sm text-red-700">{error}</p>}
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field id={`name-${slotId}`} label="Family name" required>
+        <Field id={`name-${slotId}`} label="Name" required>
           <input
             id={`name-${slotId}`}
             value={familyName}
