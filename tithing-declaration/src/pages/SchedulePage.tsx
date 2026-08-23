@@ -4,6 +4,7 @@ import { canEditWard, useUpdateWard, useWard, useWardRole } from '../hooks/useWa
 import { useDaySlots, useScheduleDays, useScheduleMutations } from '../hooks/useSchedule'
 import { formatServiceDate, formatTime, todayInZone } from '../lib/datetime'
 import { AdminShell } from '../components/AdminShell'
+import { errorMessage } from '../lib/errors'
 import { Alert, Card } from '../components/PageShell'
 import { Field, inputClass } from '../components/Field'
 import { ConfirmDialog } from '../components/ConfirmDialog'
@@ -150,7 +151,7 @@ function DayRow({
     } catch (e) {
       // Unpublishing a day with bookings is refused by the database, and the
       // reason it gives is the one worth showing.
-      setError(e instanceof Error ? e.message : 'That could not be changed.')
+      setError(errorMessage(e, 'That could not be changed.'))
     }
   }
 
@@ -361,7 +362,7 @@ function NewDayForm({ wardId, timezone }: { wardId: string; timezone: string }) 
         setWindows([newWindow()])
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Those times could not be added.')
+      setError(errorMessage(e, 'Those times could not be added.'))
     }
   }
 

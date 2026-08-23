@@ -42,6 +42,7 @@ const ANON_MAY_EXECUTE = [
 /** Signed-in users get the above plus these; each does its own admin check. */
 const AUTHENTICATED_EXTRA = [
   'claim_appointment',
+  'delete_schedule_day',
   'generate_slots',
   'queue_day_reminders',
   'queue_notification_for_admin',

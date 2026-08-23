@@ -226,3 +226,103 @@ test('the schedule', async (t) => {
     assert.equal(b.ward.timezone, TZ)
   })
 })
+
+test('removing a day people have booked', async (t) => {
+  const db = await startDatabase()
+  const { client } = db
+  t.after(() => db.stop())
+
+  const dayWithBookings = async (slug) => {
+    const { ward, day, admin, slots } = await seedWard(client, { slug })
+    for (const [i, family] of [[0, 'Sheffer'], [1, 'Pratt'], [2, 'Snow']]) {
+      await client.query(
+        `insert into public.appointments (slot_id, ward_id, family_name, email)
+         values ($1, $2, $3, $4)`,
+        [slots[i].id, ward.id, family, `${family.toLowerCase()}@example.test`]
+      )
+    }
+    return { ward, day, admin }
+  }
+
+  await t.test('cancels everybody and tells them, rather than refusing', async () => {
+    const { ward, day, admin } = await dayWithBookings('del-cancels')
+
+    const cancelled = await asUser(client, admin, async () => {
+      const { rows } = await client.query('select public.delete_schedule_day($1) as n', [day.id])
+      return rows[0].n
+    })
+    assert.equal(cancelled, 3)
+
+    // The day and its slots are gone.
+    const days = await client.query('select 1 from public.schedule_days where id = $1', [day.id])
+    assert.equal(days.rowCount, 0)
+
+    // And each family has a cancellation waiting, with real text in it — the
+    // appointment it was rendered from no longer exists.
+    const { rows } = await client.query(
+      `select to_address, body, appointment_id from public.notifications
+        where ward_id = $1 and kind = 'cancellation' order by to_address`,
+      [ward.id]
+    )
+    assert.deepEqual(rows.map((r) => r.to_address), [
+      'pratt@example.test', 'sheffer@example.test', 'snow@example.test',
+    ])
+    assert.match(rows[0].body, /has been cancelled/)
+    assert.match(rows[0].body, /Pratt family/)
+    assert.equal(rows[0].appointment_id, null, 'the appointment cascaded away, the message did not')
+  })
+
+  await t.test('records why, so the schedule explains itself afterwards', async () => {
+    const { day, admin } = await dayWithBookings('del-reason')
+    await asUser(client, admin, () =>
+      client.query('select public.delete_schedule_day($1, $2)', [day.id, 'Stake conference'])
+    )
+    // Appointments cascade away with the day; the sent messages are the record.
+    const { rows } = await client.query(
+      `select count(*)::int as n from public.notifications where kind = 'cancellation'`
+    )
+    assert.ok(rows[0].n >= 3)
+  })
+
+  await t.test('an empty day still just goes', async () => {
+    const { day, admin } = await seedWard(client, { slug: 'del-empty-day' })
+    const cancelled = await asUser(client, admin, async () => {
+      const { rows } = await client.query('select public.delete_schedule_day($1) as n', [day.id])
+      return rows[0].n
+    })
+    assert.equal(cancelled, 0)
+  })
+
+  await t.test('a viewer cannot remove a day', async () => {
+    const { day, viewer } = await dayWithBookings('del-perms')
+    const message = await asUser(client, viewer, () =>
+      errorFrom(() => client.query('select public.delete_schedule_day($1)', [day.id]))
+    )
+    assert.match(message, /ward admin/i)
+  })
+
+  await t.test('an admin of another ward cannot remove it either', async () => {
+    const { day } = await dayWithBookings('del-crossward')
+    const other = await seedWard(client, { slug: 'del-crossward-other' })
+    const message = await asUser(client, other.admin, () =>
+      errorFrom(() => client.query('select public.delete_schedule_day($1)', [day.id]))
+    )
+    assert.match(message, /ward admin/i)
+  })
+
+  await t.test('one slot is still protected — the evening is still happening', async () => {
+    // The guard this replaces stays where it belongs. "The whole day is off"
+    // does not make it safe to silently drop one family from a day that isn't.
+    const { ward } = await dayWithBookings('del-slotguard')
+    const { rows: [slot] } = await client.query(
+      `select s.id from public.slots s
+         join public.appointments a on a.slot_id = s.id
+        where a.ward_id = $1 and a.cancelled_at is null limit 1`,
+      [ward.id]
+    )
+    const message = await errorFrom(() =>
+      client.query('delete from public.slots where id = $1', [slot.id])
+    )
+    assert.match(message, /is booked at that time/)
+  })
+})

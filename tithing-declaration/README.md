@@ -152,6 +152,7 @@ These hold however you come at them, from the app or from the SQL editor:
 | --- | --- |
 | One live appointment per slot | A partial unique index, so two people tapping the same time in the same second can't both win |
 | A booked slot can't be deleted or blocked | Cancel the appointment first — otherwise the family would arrive to a schedule with no room for them |
+| Removing a whole day cancels its bookings | The evening is off, so everyone on it is cancelled and told, rather than the removal being refused |
 | A day with bookings can't be unpublished | Their appointments would still exist while the page said the evening wasn't happening |
 | A cancelled appointment can't be reinstated | The slot may already have gone to somebody else; book it again instead |
 | `appointments.ward_id` comes from the slot | Not from what the client sent, so a slot id from one ward can't be booked through another |

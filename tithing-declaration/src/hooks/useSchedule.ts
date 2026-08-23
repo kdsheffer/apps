@@ -107,10 +107,25 @@ export function useScheduleMutations(wardId: string | undefined) {
     onSuccess: (_d, v) => invalidate(v.id),
   })
 
+  /**
+   * Remove a day, cancelling everyone booked on it.
+   *
+   * Goes through `delete_schedule_day()` rather than deleting the row, because
+   * a plain delete is refused while anybody holds a slot — the cascade hits the
+   * guard that stops a booked slot vanishing under a family. The RPC cancels
+   * each appointment and queues each family their cancellation first, which is
+   * what the guard was insisting on anyway.
+   *
+   * Returns how many families were told.
+   */
   const deleteDay = useMutation({
-    mutationFn: async (dayId: string) => {
-      const { error } = await supabase.from('schedule_days').delete().eq('id', dayId)
+    mutationFn: async (input: { dayId: string; reason?: string }): Promise<number> => {
+      const { data, error } = await supabase.rpc('delete_schedule_day', {
+        p_day_id: input.dayId,
+        p_reason: input.reason || null,
+      })
       if (error) throw error
+      return (data as number) ?? 0
     },
     onSuccess: () => invalidate(),
   })

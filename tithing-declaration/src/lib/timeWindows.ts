@@ -12,6 +12,8 @@
  * nothing about which day it lands on or what timezone that day is in.
  */
 
+import { errorMessage } from './errors.ts'
+
 export interface TimeWindow {
   /** Stable across re-renders so React can key the row while it's being edited. */
   id: string
@@ -124,7 +126,7 @@ export async function applyWindows(
     } catch (error) {
       failures.push({
         window,
-        message: error instanceof Error ? error.message : 'That block could not be added.',
+        message: errorMessage(error, 'That block could not be added.'),
       })
     }
   }

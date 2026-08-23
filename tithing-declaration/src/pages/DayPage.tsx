@@ -7,6 +7,7 @@ import { useNotifications } from '../hooks/useNotifications'
 import { formatServiceDate, formatTime, hourLabel } from '../lib/datetime'
 import { formatPhone, isPlausibleEmail, isPlausiblePhone } from '../lib/phone'
 import { AdminShell } from '../components/AdminShell'
+import { errorMessage } from '../lib/errors'
 import { Alert, Card } from '../components/PageShell'
 import { Field, inputClass } from '../components/Field'
 import { TimeWindows } from '../components/TimeWindows'
@@ -74,7 +75,7 @@ export function DayPage() {
       await action
       if (message) setNotice(message)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'That change could not be saved.')
+      setError(errorMessage(e, 'That change could not be saved.'))
     }
   }
 
@@ -228,15 +229,17 @@ export function DayPage() {
         <Card>
           <h2 className="font-semibold text-gray-900">Remove this day</h2>
           <p className="mt-1 text-sm text-gray-600">
-            Deletes the day and all its times. Any booking on it has to be
-            cancelled first — the database refuses otherwise, so a booked family
-            can't be deleted out from under themselves.
+            {booked.length === 0
+              ? 'Removes the day and all its times. Nobody is booked, so nobody is affected.'
+              : `Removes the day and all its times. The ${booked.length} ${
+                  booked.length === 1 ? 'family' : 'families'
+                } booked on it will have their appointments cancelled, and anyone who left an email address will be told.`}
           </p>
           <button
             onClick={() => setConfirmDelete(true)}
             className="mt-3 rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
           >
-            Delete day
+            Remove day
           </button>
         </Card>
       )}
@@ -261,18 +264,23 @@ export function DayPage() {
 
       <ConfirmDialog
         isOpen={confirmDelete}
-        title="Delete this day?"
-        message={`${formatServiceDate(day.service_date)} and its ${slots?.length ?? 0} times will be removed.`}
-        confirmLabel="Delete day"
+        title="Remove this day?"
+        message={
+          booked.length === 0
+            ? `${formatServiceDate(day.service_date)} and its ${slots?.length ?? 0} times will be removed.`
+            : `${booked.length} ${booked.length === 1 ? 'family is' : 'families are'} booked on ${formatServiceDate(day.service_date)}. ` +
+              `Their appointments will be cancelled and everyone who left an email address will be told. This can't be undone.`
+        }
+        confirmLabel={booked.length === 0 ? 'Remove day' : `Cancel ${booked.length} and remove`}
         isDangerous
         isLoading={deleteDay.isPending}
         onCancel={() => setConfirmDelete(false)}
         onConfirm={async () => {
           try {
-            await deleteDay.mutateAsync(day.id)
+            await deleteDay.mutateAsync({ dayId: day.id })
             navigate(`/wards/${wardId}/schedule`)
           } catch (e) {
-            setError(e instanceof Error ? e.message : 'That day could not be deleted.')
+            setError(errorMessage(e, 'That day could not be removed.'))
             setConfirmDelete(false)
           }
         }}
@@ -318,7 +326,7 @@ function SlotRow({
     try {
       await action
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'That change could not be saved.')
+      onError(errorMessage(e, 'That change could not be saved.'))
     }
   }
 
@@ -510,7 +518,7 @@ function AppointmentForm({
       }
       onDone()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'That booking could not be saved.')
+      setError(errorMessage(e, 'That booking could not be saved.'))
     }
   }
 

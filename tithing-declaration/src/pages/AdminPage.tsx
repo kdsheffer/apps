@@ -5,6 +5,7 @@ import { useProfile } from '../hooks/useProfile'
 import { useAccessAdmin } from '../hooks/useAccessAdmin'
 import { supabase } from '../lib/supabase'
 import { AdminShell } from '../components/AdminShell'
+import { errorMessage } from '../lib/errors'
 import { Alert, Card } from '../components/PageShell'
 import { Field, inputClass } from '../components/Field'
 import type { Profile, Ward, WardRole, WardRoleName } from '../types'
@@ -179,7 +180,7 @@ function CreateWardForm({
       setSlugTouched(false)
       onCreated()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'That ward could not be created.')
+      setError(errorMessage(e, 'That ward could not be created.'))
     } finally {
       setBusy(false)
     }
@@ -309,7 +310,7 @@ function PeopleSection({ wards, currentUserId }: { wards: Ward[]; currentUserId:
     try {
       await action
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'That change could not be saved.')
+      setError(errorMessage(e, 'That change could not be saved.'))
     }
   }
 
