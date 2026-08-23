@@ -33,10 +33,10 @@ it to anybody who can type.
 
 - **Public booking** — one link per ward (`/w/riverbend-3rd`). Pick a time, give
   a name, phone number and email, and the details arrive by email. No account.
-- **Cancel from the email** — every confirmation and reminder carries a link
-  that cancels. The token in it is a UUID nobody can guess, so the capability
-  goes to the person who booked rather than being offered to anyone who can
-  type a phone number.
+- **Change or cancel from the email** — every message carries a link to the
+  appointment, where the member can pick another free time or cancel. The token
+  in it is a UUID nobody can guess, so the capability goes to the person who
+  booked rather than being offered to anyone who can type a phone number.
 - **Signed-in members** see their appointment under **My appointment** and can
   cancel it there. A booking made signed out can be claimed onto an account.
 - **Slot generation** — three appointments an hour at :00, :15 and :30, with the
@@ -152,6 +152,7 @@ These hold however you come at them, from the app or from the SQL editor:
 | One live appointment per slot | A partial unique index, so two people tapping the same time in the same second can't both win |
 | A booked slot can't be deleted or blocked | Cancel the appointment first — otherwise the family would arrive to a schedule with no room for them |
 | Removing a whole day cancels its bookings | The evening is off, so everyone on it is cancelled and told, rather than the removal being refused |
+| Moving keeps the appointment, not just the time | Cancel-and-rebook would invalidate the link already in the member's inbox and risk losing the slot in between |
 | A day with bookings can't be unpublished | Their appointments would still exist while the page said the evening wasn't happening |
 | A cancelled appointment can't be reinstated | The slot may already have gone to somebody else; book it again instead |
 | `appointments.ward_id` comes from the slot | Not from what the client sent, so a slot id from one ward can't be booked through another |
@@ -191,6 +192,32 @@ has one. That's the forgetful case rather than an anti-abuse rule — somebody
 books, loses the email, books again, and the ward ends up holding two slots for
 one family. The secretary isn't subject to it, which is what's needed when a
 household genuinely wants two.
+
+### Rescheduling
+
+"Can you come at seven instead?" is the commonest thing that happens to a
+booking, and there are two ways to answer it.
+
+**The member**, from the link in any message: **Change my time** lists every
+free slot across the schedule, and choosing one releases the old time as it
+takes the new. They can cancel from the same page.
+
+**The executive secretary**, from the day: **Move** on a booked slot offers the
+other free times on that day. Same day only, because that is the shape of the
+request — a move to a different evening is a different conversation, and the
+member can do it themselves.
+
+Both go through `reschedule_appointment()`, which **moves the appointment rather
+than cancelling and rebooking**. That matters for two reasons: the cancel token
+in every message already delivered goes on working, and there is no window
+between the two operations for somebody else to take the slot.
+
+A reminder already queued or sent is set aside on a move, so a fresh one goes
+out for the new time. Otherwise moving to a later day would silently cost the
+member their reminder.
+
+The old `/cancel/<token>` links still work — they redirect to the same page, so
+confirmations already sitting in inboxes don't become dead ends.
 
 ## Roles
 

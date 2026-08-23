@@ -35,7 +35,7 @@ test('notifications', async (t) => {
     assert.equal(rows[0].status, 'queued')
     assert.match(rows[0].subject, /Tithing declaration confirmed/)
     assert.match(rows[0].body, /Hello Richards,/)
-    assert.match(rows[0].body, /\/cancel\/[0-9a-f-]{36}/)
+    assert.match(rows[0].body, /\/appointment\/[0-9a-f-]{36}/)
     assert.match(rows[0].body, /Bishop's office/)
     // Real newlines, not the characters backslash and n.
     assert.ok(rows[0].body.includes('\n\n'))
@@ -361,10 +361,10 @@ test('reminders that send themselves', async (t) => {
     )
     // The trailing slash on the setting must not become a double slash.
     assert.ok(
-      rows[0].body.includes(`https://tithing.example.org/cancel/${rows[0].cancel_token}`),
+      rows[0].body.includes(`https://tithing.example.org/appointment/${rows[0].cancel_token}`),
       rows[0].body
     )
-    assert.equal(rows[0].body.includes('//cancel/'), false)
+    assert.equal(rows[0].body.includes('//appointment/'), false)
   })
 
   await t.test('the link cancels, and reads back before it is used', async () => {

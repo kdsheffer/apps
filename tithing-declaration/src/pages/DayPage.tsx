@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { canEditWard, useWard, useWardRole } from '../hooks/useWards'
 import { useDaySlots, useScheduleDays, useScheduleMutations } from '../hooks/useSchedule'
 import { useAppointmentMutations } from '../hooks/useAppointments'
+import { useRescheduleAppointment } from '../hooks/usePublicSchedule'
 import { useNotifications } from '../hooks/useNotifications'
 import { formatServiceDate, formatTime, hourLabel } from '../lib/datetime'
 import { formatPhone, isPlausibleEmail, isPlausiblePhone } from '../lib/phone'
@@ -319,6 +320,7 @@ function SlotRow({
   const { cancelAppointment } = useAppointmentMutations(wardId)
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [moving, setMoving] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
 
   const run = async (action: Promise<unknown>) => {
@@ -377,7 +379,19 @@ function SlotRow({
             {appointment ? (
               <>
                 <button
-                  onClick={() => setEditing((v) => !v)}
+                  onClick={() => {
+                    setMoving((v) => !v)
+                    setEditing(false)
+                  }}
+                  className="rounded bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-300"
+                >
+                  {moving ? 'Close' : 'Move'}
+                </button>
+                <button
+                  onClick={() => {
+                    setEditing((v) => !v)
+                    setMoving(false)
+                  }}
                   className="rounded bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-300"
                 >
                   {editing ? 'Close' : 'Edit'}
@@ -419,6 +433,16 @@ function SlotRow({
         )}
       </div>
 
+      {moving && appointment && (
+        <MoveAppointmentForm
+          appointment={appointment}
+          dayId={dayId}
+          timezone={timezone}
+          onDone={() => setMoving(false)}
+          onError={onError}
+        />
+      )}
+
       {(adding || editing) && (
         <AppointmentForm
           slotId={slot.id}
@@ -457,6 +481,76 @@ function SlotRow({
         }}
       />
     </li>
+  )
+}
+
+/**
+ * Moving somebody to another time on the same day.
+ *
+ * Same day only, because that is the request: "can you come at seven instead?"
+ * A move to a different evening is a different conversation, and the member can
+ * do it themselves from the link in their email — which offers every free time
+ * across the whole schedule.
+ */
+function MoveAppointmentForm({
+  appointment,
+  dayId,
+  timezone,
+  onDone,
+  onError,
+}: {
+  appointment: Appointment
+  dayId: string
+  timezone: string
+  onDone: () => void
+  onError: (message: string | null) => void
+}) {
+  const { data: slots } = useDaySlots(dayId)
+  const reschedule = useRescheduleAppointment()
+
+  const free = (slots ?? []).filter(
+    (slot) => !slot.appointment && !slot.blocked_at && new Date(slot.starts_at) > new Date()
+  )
+
+  if (free.length === 0) {
+    return (
+      <p className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+        Every other time on this day is taken, blocked or past. Add more times,
+        or move somebody else first.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3">
+      <p className="mb-2 text-sm text-gray-700">
+        Move {appointment.family_name} to:
+        <span className="ml-2 text-xs text-gray-500">
+          they'll be emailed the new time if they left an address
+        </span>
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {free.map((slot) => (
+          <button
+            key={slot.id}
+            disabled={reschedule.isPending}
+            onClick={() => {
+              onError(null)
+              reschedule.mutate(
+                { cancelToken: appointment.cancel_token, slotId: slot.id },
+                {
+                  onSuccess: onDone,
+                  onError: (e) => onError(errorMessage(e, 'That time could not be taken.')),
+                }
+              )
+            }}
+            className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-900 hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+          >
+            {formatTime(slot.starts_at, timezone)}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 

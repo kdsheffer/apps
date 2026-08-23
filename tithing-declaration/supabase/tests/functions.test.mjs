@@ -25,6 +25,7 @@ const ANON_MAY_EXECUTE = [
   'cancel_appointment',
   'public_schedule',
   'public_ward',
+  'reschedule_appointment',
   // Pure helpers that touch nothing.
   'format_slot_local',
   /* Authorization helpers. These have to stay executable: an RLS policy
@@ -50,6 +51,7 @@ const AUTHENTICATED_EXTRA = [
 
 /** Callable only from inside another SECURITY DEFINER function. */
 const NOBODY_ELSE = [
+  'appointment_url',
   'check_rate_limit',
   'queue_due_reminders',
   'request_fingerprint',
@@ -136,7 +138,7 @@ test('function execute grants', async (t) => {
         'grants-smoke', slots[0].id, 'Hyde', '8015550601', 'hyde@example.test',
       ])
     )
-    assert.match(rows[0].cancel_url, /\/cancel\/[0-9a-f-]{36}$/)
+    assert.match(rows[0].cancel_url, /\/appointment\/[0-9a-f-]{36}$/)
 
     const queued = await client.query('select count(*)::int as n from public.notifications')
     assert.equal(queued.rows[0].n, 1, 'queue_notification stopped working after the revoke')

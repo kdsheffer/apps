@@ -102,3 +102,31 @@ export function useClaimAppointment() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['myAppointments'] }),
   })
 }
+
+/**
+ * Move an appointment to another time.
+ *
+ * Authorized by the same token that cancels, because somebody who can call the
+ * appointment off can equally move it — and forcing them through
+ * cancel-then-rebook risks losing the slot to somebody else in between.
+ */
+export function useRescheduleAppointment(slug?: string) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: { cancelToken: string; slotId: string }) => {
+      const { error } = await supabase.rpc('reschedule_appointment', {
+        p_cancel_token: input.cancelToken,
+        p_new_slot_id: input.slotId,
+      })
+      if (error) throw error
+    },
+    onSettled: () => {
+      // Two slots changed hands, so what is free has moved either way.
+      queryClient.invalidateQueries({ queryKey: ['publicSchedule', slug] })
+      queryClient.invalidateQueries({ queryKey: ['appointmentByToken'] })
+      queryClient.invalidateQueries({ queryKey: ['myAppointments'] })
+      queryClient.invalidateQueries({ queryKey: ['daySlots'] })
+    },
+  })
+}

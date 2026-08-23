@@ -6,7 +6,7 @@ import type { User } from '@supabase/supabase-js'
 import { LoginPage } from './pages/LoginPage'
 import { SetPasswordPage } from './pages/SetPasswordPage'
 import { BookingPage } from './pages/BookingPage'
-import { CancelPage } from './pages/CancelPage'
+import { AppointmentPage } from './pages/AppointmentPage'
 import { MyAppointmentsPage } from './pages/MyAppointmentsPage'
 import { WardsPage } from './pages/WardsPage'
 import { SchedulePage } from './pages/SchedulePage'
@@ -101,9 +101,13 @@ function AppRoutes() {
     <Routes>
       {/* Public — no session required, and none assumed. */}
       <Route path="/w/:slug" element={<BookingPage />} />
-      {/* The link in every confirmation and reminder. The token is the whole
-          authorization, so this needs no session and must never require one. */}
-      <Route path="/cancel/:token" element={<CancelPage />} />
+      {/* The link in every message. The token is the whole authorization, so
+          this needs no session and must never require one. */}
+      <Route path="/appointment/:token" element={<AppointmentPage />} />
+      {/* Links already in people's inboxes from before the page grew a
+          rescheduler. Cheap to honour, and the alternative is a dead link in
+          somebody's confirmation email. */}
+      <Route path="/cancel/:token" element={<AppointmentPage />} />
 
       {/* Leadership. */}
       <Route path="/" element={user ? <Navigate to="/wards" /> : <LoginPage authError={authError} />} />

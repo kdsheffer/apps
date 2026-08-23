@@ -36,7 +36,7 @@ test('booking', async (t) => {
 
     assert.ok(booked.cancel_token)
     // The link is what replaces the confirmation code and the lookup page.
-    assert.ok(booked.cancel_url.endsWith(`/cancel/${booked.cancel_token}`))
+    assert.ok(booked.cancel_url.endsWith(`/appointment/${booked.cancel_token}`))
     assert.equal(booked.location, "Bishop's office")
 
     // That time is gone from the public list, and only that one.
@@ -185,7 +185,7 @@ test('booking', async (t) => {
       )
       assert.match(
         await errorFrom(() => book(client, 'validation', slots[0].id, 'X', '8015550191', 'x@example.test')),
-        /enter your family name/i
+        /enter a name/i
       )
       assert.match(
         await errorFrom(() => book(client, 'nonesuch', slots[0].id, 'Lee', '8015550191', 'lee@example.test')),
