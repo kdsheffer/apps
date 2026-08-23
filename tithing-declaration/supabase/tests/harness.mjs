@@ -81,9 +81,27 @@ export async function startDatabase(options = {}) {
     }
   }
 
+  const extras = []
+
   return {
     client,
+
+    /**
+     * A second connection to the same database.
+     *
+     * Needed to test anything that only goes wrong when two callers overlap —
+     * `for update skip locked` cannot be exercised from one connection, because
+     * a single session never contends with itself.
+     */
+    async newClient() {
+      const extra = pg.getPgClient()
+      await extra.connect()
+      extras.push(extra)
+      return extra
+    },
+
     async stop() {
+      for (const extra of extras) await extra.end().catch(() => {})
       await client.end()
       await pg.stop()
       await rm(dataDir, { recursive: true, force: true })

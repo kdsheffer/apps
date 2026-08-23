@@ -9,9 +9,20 @@
  *   every ward. This is the mode that matters: nobody has to remember to send
  *   anything.
  *
- *   **On demand** — the app invokes it with a signed-in user's token, to push
- *   out whatever is queued for one ward without waiting for the next tick. It
- *   queues nothing and touches no other ward.
+ *   **On demand, as a ward admin** — the app invokes it with a signed-in user's
+ *   token to push out whatever is queued for one ward without waiting for the
+ *   next tick. It queues nothing and touches no other ward.
+ *
+ *   **On demand, as the person who booked** — the booking and cancel pages send
+ *   their `cancel_token`, and delivery is scoped to that one appointment. This
+ *   is what makes a member's own confirmation arrive at once rather than on the
+ *   next tick, which is the most common path through the whole app.
+ *
+ * Messages are *claimed* rather than read: `claim_notifications()` flips a batch
+ * to 'sending' in one statement, using `for update skip locked`, so two
+ * dispatchers running at the same instant take disjoint batches. Selecting rows
+ * and updating them afterwards left a window in which both saw the same message
+ * as queued and the family got it twice.
  *
  * Delivery lives here rather than in Postgres because Postgres cannot make an
  * HTTP request, and here rather than in the browser because a provider API key
@@ -104,10 +115,13 @@ Deno.serve(async (request: Request) => {
   const configured = Boolean(env('RESEND_API_KEY') && env('NOTIFICATION_FROM_EMAIL'))
 
   let wardId: string | undefined
+  let appointmentToken: string | undefined
   try {
-    wardId = (await request.json().catch(() => ({})))?.ward_id
+    const payload = (await request.json().catch(() => ({}))) ?? {}
+    wardId = payload.ward_id
+    appointmentToken = payload.appointment_token
   } catch {
-    wardId = undefined
+    /* no body: a scheduled run */
   }
 
   const authorization = request.headers.get('Authorization') ?? ''
@@ -131,19 +145,33 @@ Deno.serve(async (request: Request) => {
 
   const admin = createClient(env('SUPABASE_URL'), serviceKey)
 
-  if (!scheduled) {
-    if (!wardId) return json({ error: 'ward_id is required.' }, 400)
+  // Narrowed to one appointment when the caller proved they hold its token.
+  let appointmentId: string | null = null
 
-    // Asked as the caller, not as the service role — which would answer for the
-    // service role, and the answer is always yes.
-    const asCaller = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
-      global: { headers: { Authorization: authorization } },
-    })
-    const { data: allowed, error: authError } = await asCaller.rpc('is_ward_admin', {
-      target_ward: wardId,
-    })
-    if (authError) return json({ error: authError.message }, 500)
-    if (!allowed) return json({ error: 'Only a ward admin can send messages.' }, 403)
+  if (!scheduled) {
+    if (appointmentToken) {
+      // Knowing the token is what authorizes cancelling; scoping a send to the
+      // same appointment is strictly less than that.
+      const { data, error: tokenError } = await admin.rpc('appointment_id_for_token', {
+        p_cancel_token: appointmentToken,
+      })
+      if (tokenError) return json({ error: tokenError.message }, 500)
+      if (!data) return json({ error: 'No such appointment.' }, 404)
+      appointmentId = data as string
+    } else if (wardId) {
+      // Asked as the caller, not as the service role — which would answer for
+      // the service role, and the answer is always yes.
+      const asCaller = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
+        global: { headers: { Authorization: authorization } },
+      })
+      const { data: allowed, error: authError } = await asCaller.rpc('is_ward_admin', {
+        target_ward: wardId,
+      })
+      if (authError) return json({ error: authError.message }, 500)
+      if (!allowed) return json({ error: 'Only a ward admin can send messages.' }, 403)
+    } else {
+      return json({ error: 'ward_id or appointment_token is required.' }, 400)
+    }
   }
 
   // Only the scheduled run creates work. An impatient admin sends what is
@@ -169,16 +197,13 @@ Deno.serve(async (request: Request) => {
     })
   }
 
-  let query = admin
-    .from('notifications')
-    .select('id, to_address, subject, body, attempts')
-    .eq('status', 'queued')
-    .order('created_at')
-    .limit(BATCH)
-
-  if (!scheduled) query = query.eq('ward_id', wardId!)
-
-  const { data: rows, error } = await query
+  /* Claimed, not selected. This is the statement that makes send-once true —
+     a concurrent dispatcher gets different rows or none, never the same ones. */
+  const { data: rows, error } = await admin.rpc('claim_notifications', {
+    p_ward_id: scheduled ? null : wardId ?? null,
+    p_appointment_id: appointmentId,
+    p_limit: BATCH,
+  })
   if (error) return json({ error: error.message }, 500)
 
   let sent = 0
@@ -189,19 +214,18 @@ Deno.serve(async (request: Request) => {
       await sendEmail(row)
       await admin
         .from('notifications')
-        .update({ status: 'sent', sent_at: new Date().toISOString(), attempts: row.attempts + 1 })
+        .update({ status: 'sent', sent_at: new Date().toISOString() })
         .eq('id', row.id)
       sent += 1
     } catch (sendError) {
-      const attempts = row.attempts + 1
       await admin
         .from('notifications')
         .update({
-          // Kept queued for another go until it has clearly stopped working —
-          // most delivery failures are a provider having a bad minute, and the
-          // next scheduled run is only minutes away.
-          status: attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
-          attempts,
+          // `attempts` was already incremented when the row was claimed, so a
+          // run that dies mid-flight still counts against the limit. Back to
+          // 'queued' for another go until it has clearly stopped working —
+          // most delivery failures are a provider having a bad minute.
+          status: row.attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
           error: sendError instanceof Error ? sendError.message : String(sendError),
         })
         .eq('id', row.id)

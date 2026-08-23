@@ -205,9 +205,21 @@ booked without an email address — which only the secretary can do — gets non
 these, and that is a routine outcome rather than an error. The cancel dialog
 says so explicitly, so the clerk knows to ring them.
 
-Anything the clerk does that queues a message also nudges the dispatcher
-straight away, rather than leaving it for the next scheduled run. The schedule
-is the guarantee; the nudge is what makes it feel immediate.
+Confirmations and cancellations are delivered straight away — whoever caused
+them nudges the dispatcher directly instead of waiting for the next tick. The
+schedule is the guarantee; the nudge is what makes it immediate. Reminders are
+the exception, and only the scheduled run queues them: a button that could pull
+tomorrow's reminders forward would mean somebody mailing families at the wrong
+time.
+
+**Every message is sent exactly once.** The dispatcher *claims* a batch —
+`claim_notifications()` flips rows to `sending` in one statement using
+`for update skip locked` — rather than selecting rows and marking them
+afterwards. The older approach left a window in which a second dispatcher saw
+the same rows as still queued, and that window was reachable in normal use: a
+clerk cancelling nudges delivery at the same moment the cron job may be running.
+A message left in `sending` by a run that died is reclaimed after ten minutes,
+and attempts are counted at claim time so even a crash loop terminates.
 
 ### 1. Set the site address
 

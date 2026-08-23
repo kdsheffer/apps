@@ -11,6 +11,30 @@ import type { BookingReceipt, PublicSlot, PublicWard } from '../types'
  * missing session.
  */
 
+/**
+ * Push out the message this appointment just queued, rather than leaving it for
+ * the next scheduled run.
+ *
+ * Authorized by the cancel token, which the caller already holds — knowing it is
+ * what authorizes cancelling, so scoping a send to the same appointment is
+ * strictly less. Without this a member waits up to a quarter of an hour staring
+ * at an empty inbox after booking, which is the worst first impression this app
+ * can make and the most common path through it.
+ *
+ * Swallows its own failure: the message is queued either way and the schedule
+ * will collect it, so a dispatcher that isn't deployed must not turn a
+ * successful booking into an error on screen.
+ */
+async function nudgeDispatch(cancelToken: string) {
+  try {
+    await supabase.functions.invoke('dispatch-notifications', {
+      body: { appointment_token: cancelToken },
+    })
+  } catch {
+    /* queued either way */
+  }
+}
+
 export function usePublicWard(slug: string | undefined) {
   return useQuery({
     queryKey: ['publicWard', slug],
@@ -59,7 +83,10 @@ export function useBookSlot(slug: string | undefined) {
         p_notes: input.notes || null,
       })
       if (error) throw error
-      return (data as BookingReceipt[])[0]
+
+      const receipt = (data as BookingReceipt[])[0]
+      await nudgeDispatch(receipt.cancel_token)
+      return receipt
     },
     // Whether it worked or not, what's free has changed — a success took a
     // slot, and a "just taken" means somebody else did.
@@ -77,6 +104,8 @@ export function useCancelAppointment(slug?: string) {
         p_reason: input.reason || null,
       })
       if (error) throw error
+
+      await nudgeDispatch(input.cancelToken)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['publicSchedule', slug] })
