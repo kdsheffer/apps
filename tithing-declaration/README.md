@@ -227,48 +227,69 @@ Delivery is plain **SMTP**, not one provider's API. SMTP is the thing every mail
 provider speaks, so switching provider — or moving from a Gmail account to a
 real domain later — is five environment variables, not a code change.
 
+#### Resend, with a domain you own
+
+The better option once you have a domain, because mail is signed by that domain
+and aligns properly.
+
+1. **Resend → Domains → Add Domain.** Use the root (`shefdev.com`) if nothing
+   else sends mail from it — `tithing@shefdev.com` reads better to a member than
+   a subdomain does. Use a subdomain (`send.shefdev.com`) if the root already
+   sends mail, or ever will: it keeps this app's sending reputation separate.
+2. Add the DNS records Resend shows — DKIM, SPF, and a return-path MX. Copy them
+   from Resend rather than from any guide; the values differ per account and
+   region. Wait for **Verified**.
+3. **API Keys → Create API Key** with sending permission. Starts with `re_`, and
+   is shown once.
+
+**One SPF record per domain, ever.** If the domain already has one — from Google
+Workspace, say — don't add a second. Merge the includes into the existing record
+instead. Two SPF records is a misconfiguration that silently fails.
+
+Worth adding a DMARC record too, at `_dmarc.<domain>`, even just
+`v=DMARC1; p=none;`. It isn't required at this volume, but Gmail and Yahoo read
+its absence as a weak signal.
+
 #### Gmail (no domain needed)
 
-The path that works without owning anything. Google actually sends the mail, so
-SPF and DKIM align properly and reminders land in inboxes — which is *not* true
-of the "verify a sender address" tiers at SendGrid, Brevo and Mailjet, where the
-mail is signed by their domain while the From says `@gmail.com`. Gmail and Yahoo
-penalise that mismatch, and a reminder in spam is worse than no reminder.
+The fallback when there's no domain. Google actually sends the mail, so SPF and
+DKIM align — which is *not* true of the "verify a sender address" tiers at
+SendGrid, Brevo and Mailjet, where the mail is signed by their domain while the
+From says `@gmail.com`.
 
-1. Create a **dedicated Gmail account** for the ward — say
-   `riverbend3rdtithing@gmail.com`. Not a personal one: replies land somewhere
-   the secretary can see, it doesn't mix with anyone's own mail, and it hands
-   over to the next secretary with the calling.
-2. Turn on **2-Step Verification** on that account. App passwords don't exist
-   without it.
-3. **Google Account → Security → App passwords**, create one for "Mail". You get
-   16 characters. Copy them — it's shown once, and it is *not* the account
-   password.
+1. Create a **dedicated Gmail account** for the ward.
+2. Turn on **2-Step Verification** — app passwords don't exist without it.
+3. **Google Account → Security → App passwords**, create one for "Mail". Sixteen
+   characters, shown once, and not the account password.
 
-Limit is around 500 recipients a day, far more than a ward sends.
-
-#### A real domain, later
-
-If you get one, nothing in the app changes. Point the same five variables at any
-provider — Resend's SMTP is `smtp.resend.com`, username `resend`, password your
-API key — and delivery moves over.
+Limit is around 500 recipients a day.
 
 ### 4. Set the secrets
 
 Under **Dashboard → Edge Functions → Secrets**:
 
-| Name | Gmail value |
-| --- | --- |
-| `SMTP_HOST` | `smtp.gmail.com` |
-| `SMTP_PORT` | `465` |
-| `SMTP_USERNAME` | `riverbend3rdtithing@gmail.com` |
-| `SMTP_PASSWORD` | the 16-character app password |
-| `NOTIFICATION_FROM_EMAIL` | `Riverbend 3rd Ward <riverbend3rdtithing@gmail.com>` |
+| Name | Resend | Gmail |
+| --- | --- | --- |
+| `SMTP_HOST` | `smtp.resend.com` | `smtp.gmail.com` |
+| `SMTP_PORT` | `465` | `465` |
+| `SMTP_USERNAME` | `resend` (literally) | the Gmail address |
+| `SMTP_PASSWORD` | the `re_…` API key | the 16-character app password |
+| `NOTIFICATION_FROM_EMAIL` | `Riverbend 3rd Ward <tithing@yourdomain.com>` | `Riverbend 3rd Ward <you@gmail.com>` |
+| `NOTIFICATION_REPLY_TO` | optional — see below | usually unset |
 
-`NOTIFICATION_FROM_EMAIL` must be the same address as `SMTP_USERNAME` — Gmail
-rewrites anything else, so a mismatch means members see the raw account address
-instead of the ward's name. The `Name <address>` form is what shows in an inbox,
-so prefer it over the bare address.
+With Resend, `SMTP_USERNAME` is the literal string `resend`, not your email or
+account name. The From address must be **on the verified domain**; anything else
+is rejected.
+
+With Gmail, `NOTIFICATION_FROM_EMAIL` must be the same address as
+`SMTP_USERNAME` — Gmail rewrites anything else, so a mismatch means members see
+the raw account address instead of the ward's name.
+
+`NOTIFICATION_REPLY_TO` is worth setting when the From address is a domain that
+receives no mail. Members reply to appointment reminders whatever the message
+says, and a reply that bounces is worse than one nobody answers — point it at an
+inbox a human opens, such as a ward Gmail account. Left unset, replies go to the
+From address, which is right when that address can receive them.
 
 Port 465 is implicit TLS. 587 also works — the function starts plaintext and
 upgrades via STARTTLS when the port isn't 465.
@@ -279,7 +300,7 @@ automatically; don't add those yourself.
 With the CLI:
 
 ```bash
-supabase secrets set SMTP_HOST=smtp.gmail.com SMTP_PORT=465 SMTP_USERNAME=you@gmail.com SMTP_PASSWORD=xxxxxxxxxxxxxxxx NOTIFICATION_FROM_EMAIL="Riverbend 3rd Ward <you@gmail.com>"
+supabase secrets set SMTP_HOST=smtp.resend.com SMTP_PORT=465 SMTP_USERNAME=resend SMTP_PASSWORD=re_xxxxxxxx NOTIFICATION_FROM_EMAIL="Riverbend 3rd Ward <tithing@yourdomain.com>"
 ```
 
 ### 5. Schedule it

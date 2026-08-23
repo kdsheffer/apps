@@ -30,7 +30,7 @@
  * Deploy:  supabase functions deploy dispatch-notifications
  *          (or paste into Dashboard → Edge Functions → via editor)
  * Secrets: SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
- *          NOTIFICATION_FROM_EMAIL
+ *          NOTIFICATION_FROM_EMAIL, and optionally NOTIFICATION_REPLY_TO
  * Schedule: every 15 minutes — see the README.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -92,11 +92,21 @@ async function openMailer(): Promise<SMTPClient> {
 }
 
 async function sendEmail(mailer: SMTPClient, row: NotificationRow): Promise<void> {
+  /* A reply-to worth setting when the From address is a domain that receives no
+   * mail. Members will reply to an appointment reminder whatever the message
+   * says — "do not reply" has never stopped anybody — and a reply that bounces
+   * is worse than one nobody answers. Point it at an inbox a human opens.
+   *
+   * Optional: with no value, replies go to the From address, which is right
+   * when that address can actually receive them. */
+  const replyTo = env('NOTIFICATION_REPLY_TO')
+
   await mailer.send({
     from: env('NOTIFICATION_FROM_EMAIL'),
     to: row.to_address,
     subject: row.subject ?? 'Tithing declaration',
     content: row.body,
+    ...(replyTo ? { replyTo } : {}),
   })
 }
 
