@@ -293,7 +293,26 @@ supabase secrets set RESEND_API_KEY=re_xxx NOTIFICATION_FROM_EMAIL="Riverbend 3r
 
 ### 5. Schedule it
 
-**Dashboard → Integrations → Cron → Create job.** Every 15 minutes, type
+First enable two Postgres extensions, under **Database → Extensions**. Search
+for each and toggle it on:
+
+| Extension | Why |
+| --- | --- |
+| `pg_cron` | Runs the schedule |
+| `pg_net` | Lets Postgres make the HTTP call to the function |
+
+Both are needed even when the job is created through the dashboard UI, because
+that UI is a wrapper over exactly these two. `pg_net` is the one that's easy to
+miss — `pg_cron` alone gives you a job that fires and then fails with
+"schema net does not exist".
+
+In SQL, if you prefer:
+
+```sql
+create extension if not exists pg_cron; create extension if not exists pg_net;
+```
+
+**Then Dashboard → Integrations → Cron → Create job.** Every 15 minutes, type
 **Supabase Edge Function**, target `dispatch-notifications`.
 
 ```
@@ -310,6 +329,21 @@ If your scheduler can't set that header, set a `CRON_SECRET` secret on the
 function, send it as an `x-cron-secret` header instead, and turn **Verify JWT**
 off for the function — otherwise the platform rejects the call before the
 function sees it.
+
+### Checking the schedule is working
+
+```sql
+select status, return_message, start_time from cron.job_run_details order by start_time desc limit 10;
+```
+
+A `200` carrying `{"mode":"scheduled",…}` is what you want. `{"mode":"on-demand"}`
+means the Authorization header is wrong — the function ran, found no ward, and
+did nothing. That failure is silent by design everywhere else, so this is where
+to catch it.
+
+Don't wait for a tick to find out whether delivery works at all: **Send now** on
+a day exercises the function, the API key and the sending domain independently
+of the schedule.
 
 A quarter of an hour is plenty of resolution for a 24-hour lead, and running it
 more often costs nothing — `queue_due_reminders()` skips anybody already queued
