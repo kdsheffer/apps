@@ -56,7 +56,7 @@ it to anybody who can type.
 ## Tech stack
 
 React 18 · TypeScript · Vite · Tailwind CSS · TanStack Query · Supabase
-(Postgres, Auth, Edge Functions) · SMTP
+(Postgres, Auth, Edge Functions) · Resend
 
 ## Setup
 
@@ -223,18 +223,16 @@ supabase functions deploy dispatch-notifications
 
 ### 3. Set up a sender
 
-Delivery is plain **SMTP**, not one provider's API. SMTP is the thing every mail
-provider speaks, so switching provider — or moving from a Gmail account to a
-real domain later — is five environment variables, not a code change.
+Mail goes out through [Resend](https://resend.com), which needs a domain you can
+add DNS records to. It never has to *receive* mail, so a domain you own for
+anything else is fine.
 
-#### Resend, with a domain you own
+Don't use a Church domain. You almost certainly can't add DNS records to it, and
+mail from it would read as official Church correspondence when it isn't.
 
-The better option once you have a domain, because mail is signed by that domain
-and aligns properly.
-
-1. **Resend → Domains → Add Domain.** Use the root (`shefdev.com`) if nothing
-   else sends mail from it — `tithing@shefdev.com` reads better to a member than
-   a subdomain does. Use a subdomain (`send.shefdev.com`) if the root already
+1. **Resend → Domains → Add Domain.** Use the root (`example.com`) if nothing
+   else sends mail from it — `tithing@example.com` reads better to a member than
+   a subdomain does. Use a subdomain (`send.example.com`) if the root already
    sends mail, or ever will: it keeps this app's sending reputation separate.
 2. Add the DNS records Resend shows — DKIM, SPF, and a return-path MX. Copy them
    from Resend rather than from any guide; the values differ per account and
@@ -250,49 +248,29 @@ Worth adding a DMARC record too, at `_dmarc.<domain>`, even just
 `v=DMARC1; p=none;`. It isn't required at this volume, but Gmail and Yahoo read
 its absence as a weak signal.
 
-#### Gmail (no domain needed)
-
-The fallback when there's no domain. Google actually sends the mail, so SPF and
-DKIM align — which is *not* true of the "verify a sender address" tiers at
-SendGrid, Brevo and Mailjet, where the mail is signed by their domain while the
-From says `@gmail.com`.
-
-1. Create a **dedicated Gmail account** for the ward.
-2. Turn on **2-Step Verification** — app passwords don't exist without it.
-3. **Google Account → Security → App passwords**, create one for "Mail". Sixteen
-   characters, shown once, and not the account password.
-
-Limit is around 500 recipients a day.
+The free tier is 3,000 messages a month, far more than a ward sends in a
+declaration season.
 
 ### 4. Set the secrets
 
 Under **Dashboard → Edge Functions → Secrets**:
 
-| Name | Resend | Gmail |
-| --- | --- | --- |
-| `SMTP_HOST` | `smtp.resend.com` | `smtp.gmail.com` |
-| `SMTP_PORT` | `465` | `465` |
-| `SMTP_USERNAME` | `resend` (literally) | the Gmail address |
-| `SMTP_PASSWORD` | the `re_…` API key | the 16-character app password |
-| `NOTIFICATION_FROM_EMAIL` | `Riverbend 3rd Ward <tithing@yourdomain.com>` | `Riverbend 3rd Ward <you@gmail.com>` |
-| `NOTIFICATION_REPLY_TO` | optional — see below | usually unset |
+| Name | Value |
+| --- | --- |
+| `RESEND_API_KEY` | the `re_…` key |
+| `NOTIFICATION_FROM_EMAIL` | `Riverbend 3rd Ward <tithing@example.com>` |
+| `NOTIFICATION_REPLY_TO` | optional — see below |
 
-With Resend, `SMTP_USERNAME` is the literal string `resend`, not your email or
-account name. The From address must be **on the verified domain**; anything else
-is rejected.
+The From address must be **on the verified domain**; Resend rejects anything
+else, and the rejection shows up against the message in the **Messages** panel.
+Both bare and `Name <address>` forms work — the second is what members see in
+their inbox, so prefer it.
 
-With Gmail, `NOTIFICATION_FROM_EMAIL` must be the same address as
-`SMTP_USERNAME` — Gmail rewrites anything else, so a mismatch means members see
-the raw account address instead of the ward's name.
-
-`NOTIFICATION_REPLY_TO` is worth setting when the From address is a domain that
-receives no mail. Members reply to appointment reminders whatever the message
-says, and a reply that bounces is worse than one nobody answers — point it at an
-inbox a human opens, such as a ward Gmail account. Left unset, replies go to the
-From address, which is right when that address can receive them.
-
-Port 465 is implicit TLS. 587 also works — the function starts plaintext and
-upgrades via STARTTLS when the port isn't 465.
+`NOTIFICATION_REPLY_TO` is worth setting because the From address is on a domain
+that receives no mail. Members reply to appointment reminders whatever the
+message says, and a reply that bounces is worse than one nobody answers — point
+it at an inbox a human opens, such as a ward Gmail account. Left unset, replies
+go to the From address.
 
 `SUPABASE_URL`, `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are injected
 automatically; don't add those yourself.
@@ -300,7 +278,7 @@ automatically; don't add those yourself.
 With the CLI:
 
 ```bash
-supabase secrets set SMTP_HOST=smtp.resend.com SMTP_PORT=465 SMTP_USERNAME=resend SMTP_PASSWORD=re_xxxxxxxx NOTIFICATION_FROM_EMAIL="Riverbend 3rd Ward <tithing@yourdomain.com>"
+supabase secrets set RESEND_API_KEY=re_xxx NOTIFICATION_FROM_EMAIL="Riverbend 3rd Ward <tithing@example.com>" NOTIFICATION_REPLY_TO=yourward@gmail.com
 ```
 
 ### 5. Schedule it
@@ -340,15 +318,13 @@ tomorrow's reminders forward.
 
 ### When delivery isn't set up
 
-With the SMTP secrets unset, the function queues as normal and delivers nothing,
-leaving the rows at `queued` rather than discarding them — they go out once the
-secrets are added instead of vanishing into a status nobody looks at. The
-**Messages** panel on a day shows the queue.
+Without `RESEND_API_KEY` and `NOTIFICATION_FROM_EMAIL` the function queues as
+normal and delivers nothing, leaving the rows at `queued` rather than discarding
+them — they go out once the secrets are added instead of vanishing into a status
+nobody looks at. The **Messages** panel on a day shows the queue.
 
-A mail server that can't be reached is treated the same way: everything stays
-queued and the function reports the connection error, rather than marking
-messages failed over what is usually a transient outage. Individual rejections
-*are* recorded against the message and retried up to three times.
+A message Resend rejects records the reason against the row and is retried on
+the next run, up to three attempts before it is marked failed for good.
 
 ### Why email only
 

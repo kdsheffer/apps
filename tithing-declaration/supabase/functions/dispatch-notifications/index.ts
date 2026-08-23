@@ -21,20 +21,20 @@
  * require A2P 10DLC registration before application messages deliver, which is
  * days of paperwork for a channel this already covers.
  *
- * Delivery is plain SMTP rather than one provider's HTTP API, because SMTP is
- * the one thing every provider speaks. Gmail, Resend, Postmark and a ward's own
- * mail server are all five environment variables apart, so changing provider —
- * or moving from a Gmail account to a real domain later — never touches this
- * file.
+ * Sending is Resend's HTTP API. This was briefly plain SMTP, on the argument
+ * that every provider speaks it and switching would cost nothing — true, but
+ * the price was five environment variables to get right instead of two, and a
+ * TCP connection to manage. With the provider settled that trade stopped paying
+ * for itself. Moving to another provider means rewriting `sendEmail` and
+ * nothing else; everything below it is provider-agnostic.
  *
  * Deploy:  supabase functions deploy dispatch-notifications
  *          (or paste into Dashboard → Edge Functions → via editor)
- * Secrets: SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
- *          NOTIFICATION_FROM_EMAIL, and optionally NOTIFICATION_REPLY_TO
+ * Secrets: RESEND_API_KEY, NOTIFICATION_FROM_EMAIL,
+ *          and optionally NOTIFICATION_REPLY_TO
  * Schedule: every 15 minutes — see the README.
  */
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -65,57 +65,43 @@ function json(body: unknown, status = 200) {
   })
 }
 
-/**
- * One connection for the whole batch.
- *
- * Opening a TLS session and authenticating per message would be slow and would
- * look to Gmail like a burst of separate sign-ins, which is the sort of thing
- * that gets an account rate-limited. The connection is opened lazily so a run
- * with nothing to send never touches the mail server at all.
- */
-async function openMailer(): Promise<SMTPClient> {
-  const port = Number(env('SMTP_PORT') || 465)
-
-  return new SMTPClient({
-    connection: {
-      hostname: env('SMTP_HOST'),
-      port,
-      // 465 is implicit TLS; 587 starts plaintext and upgrades via STARTTLS,
-      // which denomailer negotiates on its own.
-      tls: port === 465,
-      auth: {
-        username: env('SMTP_USERNAME'),
-        password: env('SMTP_PASSWORD'),
-      },
-    },
-  })
-}
-
-async function sendEmail(mailer: SMTPClient, row: NotificationRow): Promise<void> {
-  /* A reply-to worth setting when the From address is a domain that receives no
-   * mail. Members will reply to an appointment reminder whatever the message
-   * says — "do not reply" has never stopped anybody — and a reply that bounces
-   * is worse than one nobody answers. Point it at an inbox a human opens.
+async function sendEmail(row: NotificationRow): Promise<void> {
+  /* A reply-to worth setting when the From address is on a domain that receives
+   * no mail. Members reply to appointment reminders whatever the message says —
+   * "do not reply" has never stopped anybody — and a reply that bounces is
+   * worse than one nobody answers. Point it at an inbox a human opens.
    *
    * Optional: with no value, replies go to the From address, which is right
    * when that address can actually receive them. */
   const replyTo = env('NOTIFICATION_REPLY_TO')
 
-  await mailer.send({
-    from: env('NOTIFICATION_FROM_EMAIL'),
-    to: row.to_address,
-    subject: row.subject ?? 'Tithing declaration',
-    content: row.body,
-    ...(replyTo ? { replyTo } : {}),
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env('RESEND_API_KEY')}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: env('NOTIFICATION_FROM_EMAIL'),
+      to: [row.to_address],
+      subject: row.subject ?? 'Tithing declaration',
+      text: row.body,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+    }),
   })
+
+  if (!response.ok) {
+    // Truncated because this is stored on the row and read by a person in the
+    // Messages panel, not parsed. Resend's message names the actual problem —
+    // usually a From address that isn't on the verified domain.
+    throw new Error(`Resend ${response.status}: ${(await response.text()).slice(0, 300)}`)
+  }
 }
 
 Deno.serve(async (request: Request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
-  const configured = Boolean(
-    env('SMTP_HOST') && env('SMTP_USERNAME') && env('SMTP_PASSWORD') && env('NOTIFICATION_FROM_EMAIL')
-  )
+  const configured = Boolean(env('RESEND_API_KEY') && env('NOTIFICATION_FROM_EMAIL'))
 
   let wardId: string | undefined
   try {
@@ -179,8 +165,7 @@ Deno.serve(async (request: Request) => {
       sent: 0,
       failed: 0,
       configured: false,
-      error:
-        'Set SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD and NOTIFICATION_FROM_EMAIL to deliver messages.',
+      error: 'Set RESEND_API_KEY and NOTIFICATION_FROM_EMAIL to deliver messages.',
     })
   }
 
@@ -199,61 +184,29 @@ Deno.serve(async (request: Request) => {
   let sent = 0
   let failed = 0
 
-  const pending = (rows ?? []) as NotificationRow[]
-  if (pending.length === 0) {
-    return json({ mode: scheduled ? 'scheduled' : 'on-demand', queued, sent, failed, configured: true })
-  }
-
-  let mailer: SMTPClient
-  try {
-    mailer = await openMailer()
-  } catch (connectError) {
-    // Couldn't reach the mail server at all. Everything stays queued — this is
-    // a problem with the credentials or the host, not with any one message, and
-    // marking them failed would lose them over a transient outage.
-    return json(
-      {
-        mode: scheduled ? 'scheduled' : 'on-demand',
-        queued,
-        sent: 0,
-        failed: 0,
-        configured: true,
-        error: `Could not connect to ${env('SMTP_HOST')}: ${
-          connectError instanceof Error ? connectError.message : String(connectError)
-        }`,
-      },
-      502
-    )
-  }
-
-  try {
-    for (const row of pending) {
-      try {
-        await sendEmail(mailer, row)
-        await admin
-          .from('notifications')
-          .update({ status: 'sent', sent_at: new Date().toISOString(), attempts: row.attempts + 1 })
-          .eq('id', row.id)
-        sent += 1
-      } catch (sendError) {
-        const attempts = row.attempts + 1
-        await admin
-          .from('notifications')
-          .update({
-            // Kept queued for another go until it has clearly stopped working —
-            // most delivery failures are a provider having a bad minute, and the
-            // next scheduled run is only minutes away.
-            status: attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
-            attempts,
-            error: sendError instanceof Error ? sendError.message : String(sendError),
-          })
-          .eq('id', row.id)
-        failed += 1
-      }
+  for (const row of (rows ?? []) as NotificationRow[]) {
+    try {
+      await sendEmail(row)
+      await admin
+        .from('notifications')
+        .update({ status: 'sent', sent_at: new Date().toISOString(), attempts: row.attempts + 1 })
+        .eq('id', row.id)
+      sent += 1
+    } catch (sendError) {
+      const attempts = row.attempts + 1
+      await admin
+        .from('notifications')
+        .update({
+          // Kept queued for another go until it has clearly stopped working —
+          // most delivery failures are a provider having a bad minute, and the
+          // next scheduled run is only minutes away.
+          status: attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
+          attempts,
+          error: sendError instanceof Error ? sendError.message : String(sendError),
+        })
+        .eq('id', row.id)
+      failed += 1
     }
-  } finally {
-    // A connection left open holds the function alive and burns a Gmail session.
-    await mailer.close().catch(() => {})
   }
 
   return json({ mode: scheduled ? 'scheduled' : 'on-demand', queued, sent, failed, configured: true })
