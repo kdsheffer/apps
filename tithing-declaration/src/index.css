@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The light theme: the stock Tailwind values, so nothing shifts from how the
+   app looked before dark mode existed. tailwind.config.js maps the shades the
+   app actually uses onto these. */
+:root {
+  --bg-white: 255 255 255;
+  --bg-gray-50: 249 250 251;
+  --bg-gray-100: 243 244 246;
+  --bg-gray-200: 229 231 235;
+  --bg-gray-300: 209 213 219;
+  --bg-gray-400: 156 163 175;
+  --bg-gray-900: 17 24 39;
+  --bg-slate-200: 226 232 240;
+  --bg-blue-50: 239 246 255;
+  --bg-blue-100: 219 234 254;
+  --bg-indigo-100: 224 231 255;
+  --bg-red-50: 254 242 242;
+  --bg-red-100: 254 226 226;
+  --bg-red-200: 254 202 202;
+  --bg-green-50: 240 253 244;
+  --bg-green-100: 220 252 231;
+  --bg-amber-50: 255 251 235;
+  --bg-amber-100: 254 243 199;
+  --bg-yellow-100: 254 249 195;
+
+  --fg-gray-300: 209 213 219;
+  --fg-gray-400: 156 163 175;
+  --fg-gray-500: 107 114 128;
+  --fg-gray-600: 75 85 99;
+  --fg-gray-700: 55 65 81;
+  --fg-gray-800: 31 41 55;
+  --fg-gray-900: 17 24 39;
+  --fg-slate-700: 51 65 85;
+  --fg-blue-600: 37 99 235;
+  --fg-blue-700: 29 78 216;
+  --fg-blue-800: 30 64 175;
+  --fg-red-700: 185 28 28;
+  --fg-red-800: 153 27 27;
+  --fg-green-700: 21 128 61;
+  --fg-green-800: 22 101 52;
+  --fg-green-900: 20 83 45;
+  --fg-amber-700: 180 83 9;
+  --fg-amber-800: 146 64 14;
+  --fg-amber-900: 120 53 15;
+  --fg-yellow-800: 133 77 14;
+
+  --bd-gray-100: 243 244 246;
+  --bd-gray-200: 229 231 235;
+  --bd-gray-300: 209 213 219;
+  --bd-blue-100: 219 234 254;
+  --bd-blue-200: 191 219 254;
+  --bd-blue-300: 147 197 253;
+  --bd-red-200: 254 202 202;
+  --bd-green-200: 187 247 208;
+  --bd-amber-200: 253 230 138;
+  --bd-amber-300: 252 211 77;
+
+  /* Form fields carry no background class of their own anywhere in the app. */
+  --field-bg: 255 255 255;
+  --field-fg: 17 24 39;
+}
+
+/* Dark is scoped to `screen` on purpose: print falls back to the light values
+   above, so a schedule printed at night still comes out as ink on paper. */
+@media screen {
+  html.dark {
+    color-scheme: dark;
+
+    /* Surfaces, darkest first: the page sits under the cards, and the greys the
+       app uses for buttons and hovers climb away from the card instead of
+       toward it. */
+    --bg-gray-50: 16 18 22;
+    --bg-white: 24 27 33;
+    --bg-gray-100: 30 34 41;
+    --bg-gray-200: 39 44 53;
+    --bg-gray-300: 52 59 70;
+    --bg-gray-400: 71 80 93;
+    /* Tooltips and toasts, which print white text on this and so stay dark. */
+    --bg-gray-900: 48 54 62;
+    --bg-slate-200: 42 49 60;
+
+    /* Callout tints: same hues, dimmed to sit on a dark card. */
+    --bg-blue-50: 19 34 56;
+    --bg-blue-100: 24 44 72;
+    --bg-indigo-100: 26 32 56;
+    --bg-red-50: 47 21 24;
+    --bg-red-100: 60 26 30;
+    --bg-red-200: 78 32 37;
+    --bg-green-50: 16 40 27;
+    --bg-green-100: 21 51 34;
+    --bg-amber-50: 46 35 16;
+    --bg-amber-100: 59 45 19;
+    --bg-yellow-100: 52 41 15;
+
+    /* Ink, inverted: the darkest shade is now the brightest, and gray-300 stays
+       the faintest since it marks inactive stars and drag handles. */
+    --fg-gray-900: 241 243 246;
+    --fg-gray-800: 229 232 238;
+    --fg-gray-700: 213 218 226;
+    --fg-gray-600: 165 173 185;
+    --fg-gray-500: 142 150 163;
+    --fg-gray-400: 112 121 134;
+    --fg-gray-300: 84 92 105;
+    --fg-slate-700: 203 213 225;
+    --fg-blue-600: 147 197 253;
+    --fg-blue-700: 147 197 253;
+    --fg-blue-800: 191 219 254;
+    --fg-red-700: 252 165 165;
+    --fg-red-800: 254 202 202;
+    --fg-green-700: 134 239 172;
+    --fg-green-800: 134 239 172;
+    --fg-green-900: 187 247 208;
+    --fg-amber-700: 252 211 77;
+    --fg-amber-800: 252 211 77;
+    --fg-amber-900: 253 230 138;
+    --fg-yellow-800: 253 224 71;
+
+    --bd-gray-100: 32 37 44;
+    --bd-gray-200: 42 48 57;
+    --bd-gray-300: 58 66 78;
+    --bd-blue-100: 29 53 87;
+    --bd-blue-200: 36 64 107;
+    --bd-blue-300: 44 77 128;
+    --bd-red-200: 84 36 40;
+    --bd-green-200: 30 70 48;
+    --bd-amber-200: 74 58 22;
+    --bd-amber-300: 92 72 26;
+
+    --field-bg: 16 18 22;
+    --field-fg: 241 243 246;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+@layer base {
+  /* Text fields and selects are styled only by their border in this app, so
+     their fill comes from the theme rather than the user agent. Checkboxes and
+     the hidden file input are left to the browser. */
+  input:not([type='checkbox']):not([type='radio']):not([type='file']),
+  select,
+  textarea {
+    background-color: rgb(var(--field-bg));
+    color: rgb(var(--field-fg));
+  }
+
+  ::placeholder {
+    color: rgb(var(--fg-gray-400));
+  }
+}
+
+/* Printing is for taking the evening's roster to the bishopric: drop the app
+   chrome, flatten the cards, and keep an hour from splitting across pages. */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  main {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .print\:break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+@page {
+  margin: 1.5cm;
+}

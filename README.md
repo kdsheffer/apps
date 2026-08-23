@@ -7,6 +7,7 @@ Personal collection of small app projects. Each app lives in its own directory w
 | App | Description |
 | --- | --- |
 | [calling-board](./calling-board) | Interactive visualization tool for managing ward callings for leaders in The Church of Jesus Christ of Latter-Day Saints. |
+| [tithing-declaration](./tithing-declaration) | Appointment scheduling for tithing declaration — members book without an account, the executive secretary manages the schedule. |
 
 ## License
 
