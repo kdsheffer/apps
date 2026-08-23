@@ -253,3 +253,170 @@ test('row-level security', async (t) => {
     })
   })
 })
+
+test('one ward admin, one ward', async (t) => {
+  const db = await startDatabase()
+  const { client } = db
+  t.after(() => db.stop())
+
+  /**
+   * The exact arrangement a ward gets: an executive secretary with `admin` on
+   * their own ward and nothing anywhere else. Everything below asks whether
+   * that grant leaks sideways into a ward they were never given.
+   */
+  const mine = await seedWard(client, { slug: 'iso-mine', name: 'Mine Ward' })
+  const theirs = await seedWard(client, { slug: 'iso-theirs', name: 'Their Ward' })
+  const secretary = mine.admin
+
+  await client.query(
+    `insert into public.appointments (slot_id, ward_id, family_name, phone, email)
+     values ($1, $2, 'Neighbour', '8015551001', 'neighbour@example.test')`,
+    [theirs.slots[0].id, theirs.ward.id]
+  )
+
+  await t.test('sees only their own ward', async () => {
+    const { rows } = await asUser(client, secretary, () =>
+      client.query('select name from public.wards order by name')
+    )
+    assert.deepEqual(rows, [{ name: 'Mine Ward' }])
+  })
+
+  await t.test('sees only their own days and slots', async () => {
+    const days = await asUser(client, secretary, () =>
+      client.query('select ward_id from public.schedule_days')
+    )
+    assert.deepEqual([...new Set(days.rows.map((r) => r.ward_id))], [mine.ward.id])
+
+    const slots = await asUser(client, secretary, () =>
+      client.query('select count(*)::int as n from public.slots')
+    )
+    assert.equal(slots.rows[0].n, mine.slots.length)
+  })
+
+  await t.test("cannot see the other ward's families", async () => {
+    const { rows } = await asUser(client, secretary, () =>
+      client.query('select family_name from public.appointments')
+    )
+    assert.deepEqual(rows, [], "a neighbouring ward's booking was visible")
+  })
+
+  await t.test("cannot add a day to the other ward", async () => {
+    assert.ok(
+      await asUser(client, secretary, () =>
+        refused(() =>
+          client.query(
+            `insert into public.schedule_days (ward_id, service_date, created_by)
+             values ($1, current_date + 30, $2)`,
+            [theirs.ward.id, secretary]
+          )
+        )
+      )
+    )
+  })
+
+  await t.test("cannot generate slots on the other ward's day", async () => {
+    const message = await asUser(client, secretary, () =>
+      errorFrom(() =>
+        client.query(`select public.generate_slots($1, '09:00'::time, '10:00'::time)`, [
+          theirs.day.id,
+        ])
+      )
+    )
+    assert.match(message, /ward admin/i)
+  })
+
+  await t.test("cannot block or delete the other ward's slots", async () => {
+    await asUser(client, secretary, async () => {
+      assert.ok(await refused(() =>
+        client.query('update public.slots set blocked_at = now() where id = $1', [
+          theirs.slots[1].id,
+        ])
+      ))
+      assert.ok(await refused(() =>
+        client.query('delete from public.slots where id = $1', [theirs.slots[1].id])
+      ))
+    })
+  })
+
+  await t.test("cannot book into or cancel in the other ward", async () => {
+    await asUser(client, secretary, async () => {
+      assert.ok(await refused(() =>
+        client.query(
+          `insert into public.appointments (slot_id, ward_id, family_name, phone)
+           values ($1, $2, 'Sneaky', '8015551002')`,
+          [theirs.slots[2].id, theirs.ward.id]
+        )
+      ))
+      assert.ok(await refused(() =>
+        client.query(`update public.appointments set cancelled_at = now() where ward_id = $1`, [
+          theirs.ward.id,
+        ])
+      ))
+    })
+  })
+
+  await t.test("cannot send messages for the other ward", async () => {
+    const { rows: [appt] } = await client.query(
+      'select id from public.appointments where ward_id = $1',
+      [theirs.ward.id]
+    )
+    const message = await asUser(client, secretary, () =>
+      errorFrom(() =>
+        client.query('select public.queue_notification_for_admin($1, $2)', [appt.id, 'reminder'])
+      )
+    )
+    assert.match(message, /ward admin/i)
+
+    assert.ok(await asUser(client, secretary, () =>
+      refused(() => client.query('select public.queue_day_reminders($1)', [theirs.day.id]))
+    ))
+  })
+
+  await t.test("cannot read the other ward's messages", async () => {
+    await client.query(
+      `select public.queue_notification(
+         (select id from public.appointments where ward_id = $1), 'confirmation')`,
+      [theirs.ward.id]
+    )
+    const { rows } = await asUser(client, secretary, () =>
+      client.query('select to_address from public.notifications')
+    )
+    assert.deepEqual(rows, [])
+  })
+
+  await t.test('cannot grant themselves anything, anywhere', async () => {
+    await asUser(client, secretary, async () => {
+      // Not into the other ward…
+      assert.ok(await refused(() =>
+        client.query(
+          `insert into public.ward_roles (ward_id, user_id, role, granted_by)
+           values ($1, $2, 'admin', $2)`,
+          [theirs.ward.id, secretary]
+        )
+      ))
+      // …and not to system admin, which would reach every ward at once.
+      const { rowCount } = await client.query(
+        'update public.profiles set is_super_admin = true where id = $1',
+        [secretary]
+      )
+      assert.equal(rowCount, 0)
+    })
+  })
+
+  await t.test('can do all of it in their own ward', async () => {
+    // The other half of the guarantee: the grant has to actually work.
+    await asUser(client, secretary, async () => {
+      const { rowCount } = await client.query(
+        'update public.slots set blocked_at = now() where id = $1',
+        [mine.slots[3].id]
+      )
+      assert.equal(rowCount, 1)
+
+      const added = await client.query(
+        `select public.generate_slots($1, '09:00'::time, '10:00'::time) as n`,
+        [mine.day.id]
+      )
+      assert.equal(added.rows[0].n, 3)
+    })
+  })
+})

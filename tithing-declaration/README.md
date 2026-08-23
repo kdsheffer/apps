@@ -177,6 +177,38 @@ books, loses the email, books again, and the ward ends up holding two slots for
 one family. The secretary isn't subject to it, which is what's needed when a
 household genuinely wants two.
 
+## Roles
+
+Three, and only the first is site-wide.
+
+| Role | Where it lives | What it can do |
+| --- | --- | --- |
+| **System admin** | `profiles.is_super_admin` | Everything, in every ward. Creates wards and grants the other two. |
+| **Executive secretary** | `ward_roles.role = 'admin'` | Everything in **one** ward: build the schedule, see every booking with contact details, add and edit people by hand, cancel. |
+| **Bishopric** | `ward_roles.role = 'viewer'` | See one ward's schedule and who is booked. Changes nothing. |
+
+Members booking an appointment have no role and never sign in.
+
+### Granting access
+
+There is no invite flow: a person must **sign in once** before they can be
+granted anything, because the grant attaches to a `profiles` row that only
+exists after a first sign-in.
+
+Once they have, **/admin → People** lists them. Find them, choose the ward, pick
+**Executive secretary**, and press Grant. Leave **System admin** unticked — that
+is the one grant that reaches every ward.
+
+### What ward isolation actually means
+
+A ward grant is scoped by row-level security, not by the UI hiding buttons. An
+executive secretary for one ward cannot, in another ward: list it, see its days
+or slots, read its families or their contact details, add or delete days, block
+or delete slots, create or cancel bookings, queue or read messages, or grant
+themselves anything. `supabase/tests/rls.test.mjs` asserts each of those, and
+that the same person *can* do all of it in their own ward — a lockdown that
+also locks out the person it was meant for is not much use.
+
 ## Reminders
 
 Nothing is sent from Postgres or the browser. Messages are rendered into
