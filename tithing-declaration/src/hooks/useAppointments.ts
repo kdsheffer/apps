@@ -7,6 +7,27 @@ import type { Appointment } from '../types'
  * somebody who rang up, corrected when a number was taken down wrong, and
  * cancelled when a family can't come.
  */
+/**
+ * Nudge the dispatcher after something the clerk did that queues a message.
+ *
+ * Without this a cancellation sits in the queue until the next scheduled run —
+ * up to a quarter of an hour during which the family has heard nothing and the
+ * clerk has no reason to think anything is outstanding. The scheduled run is
+ * the guarantee; this is what makes it feel immediate.
+ *
+ * Deliberately swallows its own failure. The message is already queued and will
+ * go out on the next tick regardless, so a dispatcher that isn't deployed yet
+ * should not turn a successful cancellation into an error on screen.
+ */
+async function nudgeDispatch(wardId: string | undefined) {
+  if (!wardId) return
+  try {
+    await supabase.functions.invoke('dispatch-notifications', { body: { ward_id: wardId } })
+  } catch {
+    /* queued either way */
+  }
+}
+
 export function useAppointmentMutations(wardId: string | undefined) {
   const queryClient = useQueryClient()
 
@@ -54,11 +75,12 @@ export function useAppointmentMutations(wardId: string | undefined) {
       if (error) throw error
 
       // Send the confirmation only if there's somewhere to send it.
-      if (input.email?.trim() || input.phone?.trim()) {
+      if (input.email?.trim()) {
         await supabase.rpc('queue_notification_for_admin', {
           p_appointment_id: (data as Appointment).id,
           p_kind: 'confirmation',
         })
+        await nudgeDispatch(wardId)
       }
 
       return data as Appointment
@@ -90,6 +112,10 @@ export function useAppointmentMutations(wardId: string | undefined) {
         p_reason: input.reason || null,
       })
       if (error) throw error
+
+      // The RPC queued a cancellation if the family left an email address.
+      // Push it out now rather than leaving them to find out on the night.
+      await nudgeDispatch(wardId)
     },
     onSuccess: (_d, v) => invalidate(v.dayId),
   })

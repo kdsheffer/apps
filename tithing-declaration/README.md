@@ -195,9 +195,19 @@ Two messages go out, both automatically:
 | On booking | Confirmation with the time, the place, and a cancel link |
 | 24 hours before | Reminder with the same details and the same link |
 
+A third goes out when an appointment is **cancelled**, whether the family
+cancelled it themselves from the link or the clerk did it from the schedule —
+both go through the same `cancel_appointment()` function, so a family finds out
+either way rather than only when they turn up.
+
 The lead time is per ward (`wards.reminder_lead_hours`, default 24). A family
-booked without an email address — which only the secretary can do — gets
-neither, and that is a routine outcome rather than an error.
+booked without an email address — which only the secretary can do — gets none of
+these, and that is a routine outcome rather than an error. The cancel dialog
+says so explicitly, so the clerk knows to ring them.
+
+Anything the clerk does that queues a message also nudges the dispatcher
+straight away, rather than leaving it for the next scheduled run. The schedule
+is the guarantee; the nudge is what makes it feel immediate.
 
 ### 1. Set the site address
 

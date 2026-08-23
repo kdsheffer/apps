@@ -462,7 +462,9 @@ function SlotRow({
         title="Cancel this booking?"
         message={
           appointment
-            ? `The ${appointment.family_name} family will be sent a cancellation if they left an email address, and the time goes back on the schedule.`
+            ? appointment.email
+              ? `The ${appointment.family_name} family will be emailed at ${appointment.email} to let them know, and the time goes back on the schedule.`
+              : `The ${appointment.family_name} family left no email address, so nobody will be told automatically — you may want to ring them. The time goes back on the schedule.`
             : ''
         }
         confirmLabel="Cancel booking"

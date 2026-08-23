@@ -105,6 +105,69 @@ test('notifications', async (t) => {
     assert.match(rows[1].subject, /cancelled/i)
   })
 
+  await t.test('a cancellation by the clerk notifies the family', async () => {
+    // The clerk's Cancel button goes through the same RPC as the link in the
+    // member's email, deliberately — so a family finds out their appointment is
+    // gone however it went, rather than only when they turn up.
+    const { ward, admin, slots } = await seedWard(client, { slug: 'notif-clerkcancel' })
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, phone, email, booked_by_admin)
+       values ($1, $2, 'Hinckley', '8015550901', 'hinckley@example.test', true)`,
+      [slots[0].id, ward.id]
+    )
+    const { rows: [appt] } = await client.query(
+      'select id, cancel_token from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+
+    await asUser(client, admin, () =>
+      client.query('select public.cancel_appointment($1, $2)', [
+        appt.cancel_token,
+        'Bishopric meeting ran over',
+      ])
+    )
+
+    const rows = await queued(client, ward.id)
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'cancellation')
+    assert.equal(rows[0].to_address, 'hinckley@example.test')
+    assert.match(rows[0].body, /has been cancelled/)
+
+    // And it records who did it, which the family's own cancellation does not.
+    const { rows: [after] } = await client.query(
+      'select cancelled_by, cancelled_reason from public.appointments where id = $1',
+      [appt.id]
+    )
+    assert.equal(after.cancelled_by, admin)
+    assert.equal(after.cancelled_reason, 'Bishopric meeting ran over')
+  })
+
+  await t.test('cancelling a family with no email address is silent, not an error', async () => {
+    // The name-only booking the clerk typed in. There is nowhere to write to,
+    // and that must not stop the cancellation going through.
+    const { ward, admin, slots } = await seedWard(client, { slug: 'notif-cancelnoemail' })
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, booked_by_admin)
+       values ($1, $2, 'Monson', true)`,
+      [slots[0].id, ward.id]
+    )
+    const { rows: [appt] } = await client.query(
+      'select cancel_token from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+
+    await asUser(client, admin, () =>
+      client.query('select public.cancel_appointment($1)', [appt.cancel_token])
+    )
+
+    assert.deepEqual(await queued(client, ward.id), [])
+    const { rows } = await client.query(
+      'select cancelled_at from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+    assert.notEqual(rows[0].cancelled_at, null, 'the cancellation itself must still happen')
+  })
+
   await t.test('queueing reminders twice does not send twice', async () => {
     const { ward, day, admin, slots } = await seedWard(client, { slug: 'notif-remind' })
 
