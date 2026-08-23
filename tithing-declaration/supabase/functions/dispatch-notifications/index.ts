@@ -13,10 +13,14 @@
  *   token to push out whatever is queued for one ward without waiting for the
  *   next tick. It queues nothing and touches no other ward.
  *
- *   **On demand, as the person who booked** — the booking and cancel pages send
- *   their `cancel_token`, and delivery is scoped to that one appointment. This
- *   is what makes a member's own confirmation arrive at once rather than on the
- *   next tick, which is the most common path through the whole app.
+ *   **Immediate, from the database** — a trigger on `notifications` posts here
+ *   with the service role key and an `appointment_id` the moment a confirmation
+ *   or cancellation is written. This is what makes those arrive at once rather
+ *   than on the next tick. It queues nothing: the message already exists.
+ *
+ *   **On demand, as the person who booked** — a `cancel_token` scopes delivery
+ *   to that one appointment. Kept because it needs no server-side secret,
+ *   though the database trigger is what actually carries this load.
  *
  * Messages are *claimed* rather than read: `claim_notifications()` flips a batch
  * to 'sending' in one statement, using `for update skip locked`, so two
@@ -116,10 +120,14 @@ Deno.serve(async (request: Request) => {
 
   let wardId: string | undefined
   let appointmentToken: string | undefined
+  /* Sent by the database trigger, which already knows the id and has already
+     authenticated with the service role key. */
+  let directAppointmentId: string | undefined
   try {
     const payload = (await request.json().catch(() => ({}))) ?? {}
     wardId = payload.ward_id
     appointmentToken = payload.appointment_token
+    directAppointmentId = payload.appointment_id
   } catch {
     /* no body: a scheduled run */
   }
@@ -145,8 +153,13 @@ Deno.serve(async (request: Request) => {
 
   const admin = createClient(env('SUPABASE_URL'), serviceKey)
 
-  // Narrowed to one appointment when the caller proved they hold its token.
+  // Narrowed to one appointment when the caller proved they hold its token, or
+  // when the trigger named it outright.
   let appointmentId: string | null = null
+
+  if (scheduled && directAppointmentId) {
+    appointmentId = directAppointmentId
+  }
 
   if (!scheduled) {
     if (appointmentToken) {
@@ -174,10 +187,12 @@ Deno.serve(async (request: Request) => {
     }
   }
 
-  // Only the scheduled run creates work. An impatient admin sends what is
-  // already queued; they do not get to pull tomorrow's reminders forward.
+  /* Only a scheduled sweep creates work. An impatient admin sends what is
+     already queued, and the trigger's call is about one message that already
+     exists — neither gets to pull tomorrow's reminders forward, which is what
+     keeps reminders on the clock rather than on whatever somebody just did. */
   let queued = 0
-  if (scheduled) {
+  if (scheduled && !directAppointmentId) {
     const { data, error } = await admin.rpc('queue_due_reminders')
     if (error) return json({ error: `Could not queue reminders: ${error.message}` }, 500)
     queued = (data as number) ?? 0

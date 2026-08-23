@@ -13,7 +13,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { startDatabase, asAnon } from './harness.mjs'
+import { startDatabase, asAnon, asUser, refused } from './harness.mjs'
 import { seedWard } from './fixture.mjs'
 
 const claim = (client, { wardId = null, appointmentId = null, limit = 50 } = {}) =>
@@ -189,5 +189,130 @@ test('dispatching', async (t) => {
       }
       assert.equal(refused, true, 'anon could take messages out of the queue')
     })
+  })
+})
+
+test('dispatching the instant a message is written', async (t) => {
+  const db = await startDatabase()
+  const { client } = db
+  t.after(() => db.stop())
+
+  /**
+   * The bare Postgres these tests run against has no pg_net, which is the point
+   * of most of what follows: the trigger has to be harmless on a project that
+   * hasn't got it, on one that hasn't been configured, and on one where the
+   * call fails. In every case the message stays queued and the schedule
+   * collects it — the fast path is an optimisation, never the guarantee.
+   */
+  const bookWithEmail = async (slug, family) => {
+    const { ward, slots } = await seedWard(client, { slug })
+    await asAnon(client, () =>
+      client.query('select * from public.book_slot($1, $2, $3, $4, $5)', [
+        slug, slots[0].id, family, '8015551101', `${family.toLowerCase()}@example.test`,
+      ])
+    )
+    return ward
+  }
+
+  await t.test('a booking still succeeds with no pg_net installed', async () => {
+    const ward = await bookWithEmail('trig-nonet', 'Pratt')
+
+    const { rows } = await client.query(
+      `select status, kind from public.notifications where ward_id = $1`,
+      [ward.id]
+    )
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].kind, 'confirmation')
+    assert.equal(rows[0].status, 'queued', 'still queued, ready for the schedule')
+  })
+
+  await t.test('a booking still succeeds when configured but the call fails', async () => {
+    // Configured to post somewhere that cannot work. The trigger must swallow
+    // it — an exception here would roll back the appointment itself, and a
+    // member turning up to no slot is far worse than a late email.
+    await client.query(
+      `update public.app_settings set dispatch_url = 'http://127.0.0.1:1/nope' where id`
+    )
+    await client.query(
+      `insert into public.app_secrets (name, value) values ('dispatch_key', 'test-key')
+       on conflict (name) do update set value = excluded.value`
+    )
+
+    const ward = await bookWithEmail('trig-badurl', 'Kimball')
+
+    const { rows } = await client.query(
+      `select count(*)::int as n from public.appointments where ward_id = $1 and cancelled_at is null`,
+      [ward.id]
+    )
+    assert.equal(rows[0].n, 1, 'the booking was rolled back by a dispatch failure')
+
+    const queuedRows = await client.query(
+      `select status from public.notifications where ward_id = $1`,
+      [ward.id]
+    )
+    assert.equal(queuedRows.rows[0].status, 'queued')
+  })
+
+  await t.test('the trigger ignores reminders', async () => {
+    // Reminders belong to the schedule. One sent the moment it is queued is one
+    // sent at whatever hour the scheduler happened to wake up.
+    const { ward, day } = await seedWard(client, { slug: 'trig-reminder' })
+    const { rows: [slot] } = await client.query(
+      `insert into public.slots (day_id, starts_at) values ($1, now() + interval '20 hours')
+       returning *`,
+      [day.id]
+    )
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, email)
+       values ($1, $2, 'Snow', 'snow@example.test')`,
+      [slot.id, ward.id]
+    )
+
+    const { rows } = await client.query('select public.queue_due_reminders() as n')
+    assert.equal(rows[0].n, 1)
+
+    const kinds = await client.query(
+      `select kind, status from public.notifications where ward_id = $1`,
+      [ward.id]
+    )
+    assert.equal(kinds.rows[0].kind, 'reminder')
+    assert.equal(kinds.rows[0].status, 'queued')
+  })
+
+  await t.test('the service key is unreadable through the API', async () => {
+    // It authenticates as the service role. A ward viewer being able to read it
+    // would hand them every table in the project.
+    const { root, viewer } = await seedWard(client, { slug: 'trig-secret' })
+
+    for (const who of [viewer, root]) {
+      const refusedRead = await asUser(client, who, () =>
+        refused(() => client.query('select value from public.app_secrets'))
+      )
+      assert.equal(refusedRead, true, 'app_secrets was readable by a signed-in user')
+    }
+
+    await asAnon(client, async () => {
+      assert.equal(
+        await refused(() => client.query('select value from public.app_secrets')),
+        true
+      )
+    })
+  })
+
+  await t.test('a cancellation is dispatched the same way', async () => {
+    const ward = await bookWithEmail('trig-cancel', 'Young')
+    const { rows: [appt] } = await client.query(
+      'select cancel_token from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+    await asAnon(client, () =>
+      client.query('select public.cancel_appointment($1)', [appt.cancel_token])
+    )
+
+    const { rows } = await client.query(
+      `select kind from public.notifications where ward_id = $1 order by created_at`,
+      [ward.id]
+    )
+    assert.deepEqual(rows.map((r) => r.kind), ['confirmation', 'cancellation'])
   })
 })

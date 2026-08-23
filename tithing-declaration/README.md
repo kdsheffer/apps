@@ -237,12 +237,21 @@ booked without an email address — which only the secretary can do — gets non
 these, and that is a routine outcome rather than an error. The cancel dialog
 says so explicitly, so the clerk knows to ring them.
 
-Confirmations and cancellations are delivered straight away — whoever caused
-them nudges the dispatcher directly instead of waiting for the next tick. The
-schedule is the guarantee; the nudge is what makes it immediate. Reminders are
-the exception, and only the scheduled run queues them: a button that could pull
-tomorrow's reminders forward would mean somebody mailing families at the wrong
-time.
+Confirmations and cancellations are delivered straight away, by a trigger on
+`notifications` that asks pg_net to post to the dispatcher the moment the
+message is written. Reminders are deliberately excluded: one sent the moment it
+is queued is one sent at whatever hour the scheduler happened to wake up.
+
+This started life as a call from the browser and did not work. A signed-out
+member carries a publishable key, and the new key format is not a JWT — so with
+the function's JWT verification on, Supabase's gateway refused the call before
+the function ran, the failure was swallowed, and confirmations sat in the queue.
+Triggering from Postgres has no browser, no CORS, no gateway and no anonymous
+caller in the path.
+
+The trigger can never cost you a booking: an unconfigured project, a missing
+pg_net, or a call that fails all leave the message queued for the scheduled run,
+because an exception there would roll back the appointment itself.
 
 **Every message is sent exactly once.** The dispatcher *claims* a batch —
 `claim_notifications()` flips rows to `sending` in one statement using
@@ -373,6 +382,19 @@ If your scheduler can't set that header, set a `CRON_SECRET` secret on the
 function, send it as an `x-cron-secret` header instead, and turn **Verify JWT**
 off for the function — otherwise the platform rejects the call before the
 function sees it.
+
+### Immediate delivery (optional but wanted)
+
+Two values, set once. The URL is your function's; the key is the service role
+key, which lives in `app_secrets` — a table with RLS on and no policies, so
+nothing can read it through the API whatever role it holds.
+
+```sql
+update public.app_settings set dispatch_url = 'https://<project-ref>.supabase.co/functions/v1/dispatch-notifications' where id; insert into public.app_secrets (name, value) values ('dispatch_key', '<service role key>') on conflict (name) do update set value = excluded.value, updated_at = now();
+```
+
+Needs `pg_net`, which the schedule needs anyway. Skip this and everything still
+works — confirmations just wait for the next tick.
 
 ### Checking the schedule is working
 
