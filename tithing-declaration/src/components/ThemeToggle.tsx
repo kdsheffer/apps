@@ -15,7 +15,7 @@ export function ThemeToggle({ className = '' }: { className?: string }) {
       title={label}
       aria-label={label}
       aria-pressed={theme === 'dark'}
-      className={`rounded p-2 text-gray-700 transition-colors hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 print:hidden ${className}`}
+      className={`rounded p-2 text-gray-700 transition-colors hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 ${className}`}
     >
       <svg
         viewBox="0 0 24 24"

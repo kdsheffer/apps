@@ -47,9 +47,19 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
 export function Alert({
   tone = 'error',
   children,
+  onDismiss,
 }: {
   tone?: 'error' | 'success' | 'info'
   children: ReactNode
+  /**
+   * Given for a message that reports something that already happened.
+   *
+   * Those persist until something else replaces them, which means a "Saved."
+   * from ten minutes ago is still sitting on screen implying it just happened.
+   * A message that describes the current state of the form — a validation
+   * error, say — has nothing to dismiss and should leave this unset.
+   */
+  onDismiss?: () => void
 }) {
   const tones = {
     error: 'border-red-200 bg-red-50 text-red-700',
@@ -57,8 +67,21 @@ export function Alert({
     info: 'border-blue-200 bg-blue-50 text-blue-800',
   }
   return (
-    <div role={tone === 'error' ? 'alert' : 'status'} className={`rounded border p-4 ${tones[tone]}`}>
-      {children}
+    <div
+      role={tone === 'error' ? 'alert' : 'status'}
+      className={`flex items-start gap-3 rounded border p-4 ${tones[tone]}`}
+    >
+      <div className="flex-1">{children}</div>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="-mr-1 -mt-1 shrink-0 rounded px-2 py-0.5 text-lg leading-none opacity-60 hover:bg-black/5 hover:opacity-100"
+        >
+          ×
+        </button>
+      )}
     </div>
   )
 }

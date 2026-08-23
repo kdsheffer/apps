@@ -149,13 +149,5 @@ export function useScheduleMutations(wardId: string | undefined) {
     onSuccess: (_d, v) => invalidate(v.dayId),
   })
 
-  const deleteSlot = useMutation({
-    mutationFn: async (input: { slotId: string; dayId: string }) => {
-      const { error } = await supabase.from('slots').delete().eq('id', input.slotId)
-      if (error) throw error
-    },
-    onSuccess: (_d, v) => invalidate(v.dayId),
-  })
-
-  return { createDay, updateDay, deleteDay, generateSlots, setSlotBlocked, deleteSlot }
+  return { createDay, updateDay, deleteDay, generateSlots, setSlotBlocked }
 }

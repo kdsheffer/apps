@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { canEditWard, useUpdateWard, useWard, useWardRole } from '../hooks/useWards'
-import { useScheduleDays, useScheduleMutations } from '../hooks/useSchedule'
-import { formatServiceDate, todayInZone } from '../lib/datetime'
+import { useDaySlots, useScheduleDays, useScheduleMutations } from '../hooks/useSchedule'
+import { formatServiceDate, formatTime, todayInZone } from '../lib/datetime'
 import { AdminShell } from '../components/AdminShell'
 import { Alert, Card } from '../components/PageShell'
 import { Field, inputClass } from '../components/Field'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { TimeWindows } from '../components/TimeWindows'
 import { applyWindows, describeOutcome, firstError, newWindow } from '../lib/timeWindows'
 import type { TimeWindow } from '../lib/timeWindows'
@@ -83,7 +84,12 @@ export function SchedulePage() {
         ) : (
           <div className="space-y-3">
             {[...upcoming].reverse().map((day) => (
-              <DayRow key={day.id} day={day} wardId={wardId!} />
+              <DayRow
+                key={day.id}
+                day={{ ...day, timezone: ward.timezone }}
+                wardId={wardId!}
+                editable={editable}
+              />
             ))}
           </div>
         )}
@@ -94,7 +100,12 @@ export function SchedulePage() {
           <h2 className="mb-3 text-lg font-semibold text-gray-900">Past</h2>
           <div className="space-y-3">
             {past.map((day) => (
-              <DayRow key={day.id} day={day} wardId={wardId!} />
+              <DayRow
+                key={day.id}
+                day={{ ...day, timezone: ward.timezone }}
+                wardId={wardId!}
+                editable={editable}
+              />
             ))}
           </div>
         </section>
@@ -103,28 +114,173 @@ export function SchedulePage() {
   )
 }
 
-function DayRow({ day, wardId }: { day: ScheduleDay; wardId: string }) {
+/**
+ * One evening on the ward's schedule.
+ *
+ * Three things happen here rather than behind a drill-down, because all three
+ * are what the secretary does most: seeing whether a day is open for booking,
+ * opening it, and glancing at who has signed up. The row expands in place for
+ * the last of those; **Open** goes to the full page where slots are managed.
+ */
+function DayRow({
+  day,
+  wardId,
+  editable,
+}: {
+  /* The ward's timezone rides along so the quick view can render slot times
+     without every row fetching the ward again. */
+  day: ScheduleDay & { timezone: string }
+  wardId: string
+  editable: boolean
+}) {
+  const { updateDay } = useScheduleMutations(wardId)
+  const [expanded, setExpanded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [confirmUnpublish, setConfirmUnpublish] = useState(false)
+
+  const published = day.published_at !== null
+
+  const setPublished = async (open: boolean) => {
+    setError(null)
+    try {
+      await updateDay.mutateAsync({
+        id: day.id,
+        published_at: open ? new Date().toISOString() : null,
+      })
+    } catch (e) {
+      // Unpublishing a day with bookings is refused by the database, and the
+      // reason it gives is the one worth showing.
+      setError(e instanceof Error ? e.message : 'That could not be changed.')
+    }
+  }
+
   return (
-    <Link
-      to={`/wards/${wardId}/schedule/${day.id}`}
-      className="block rounded-lg bg-white p-4 shadow hover:ring-2 hover:ring-blue-500"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="font-semibold text-gray-900">{formatServiceDate(day.service_date)}</p>
-          <p className="text-sm text-gray-600">{day.location ?? 'No location set'}</p>
-        </div>
-        <span
-          className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
-            day.published_at
-              ? 'bg-green-100 text-green-800'
-              : 'bg-amber-100 text-amber-800'
-          }`}
+    <div className="rounded-lg bg-white shadow">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
         >
-          {day.published_at ? 'Open for booking' : 'Not published'}
-        </span>
+          <span
+            aria-hidden="true"
+            className={`shrink-0 text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          >
+            ▸
+          </span>
+          <span className="min-w-0">
+            <span className="block font-semibold text-gray-900">
+              {formatServiceDate(day.service_date)}
+            </span>
+            <span className="block text-sm text-gray-600">
+              {day.location ?? 'No location set'}
+            </span>
+          </span>
+        </button>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              published ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+            }`}
+          >
+            {published ? 'Open for booking' : 'Not published'}
+          </span>
+
+          {editable && (
+            <button
+              onClick={() => (published ? setConfirmUnpublish(true) : setPublished(true))}
+              disabled={updateDay.isPending}
+              className={`rounded px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${
+                published
+                  ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  : 'bg-green-600 text-white hover:bg-green-700'
+              }`}
+            >
+              {published ? 'Unpublish' : 'Publish'}
+            </button>
+          )}
+
+          <Link
+            to={`/wards/${wardId}/schedule/${day.id}`}
+            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Open
+          </Link>
+        </div>
       </div>
-    </Link>
+
+      {error && (
+        <div className="px-4 pb-4">
+          <Alert onDismiss={() => setError(null)}>{error}</Alert>
+        </div>
+      )}
+
+      {expanded && <DayQuickView dayId={day.id} timezone={day.timezone} />}
+
+      <ConfirmDialog
+        isOpen={confirmUnpublish}
+        title="Hide this day from members?"
+        message="It disappears from the booking page and nobody new can take a time. Anyone already booked keeps their appointment and is not told."
+        confirmLabel="Unpublish"
+        cancelLabel="Leave it open"
+        isLoading={updateDay.isPending}
+        onCancel={() => setConfirmUnpublish(false)}
+        onConfirm={async () => {
+          await setPublished(false)
+          setConfirmUnpublish(false)
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * Who is coming, at a glance.
+ *
+ * Loaded only once the row is open — a ward with a season's worth of days would
+ * otherwise fetch every slot on the schedule to show a list nobody expanded.
+ */
+function DayQuickView({ dayId, timezone }: { dayId: string; timezone: string }) {
+  const { data: slots, isLoading } = useDaySlots(dayId)
+
+  if (isLoading) {
+    return <p className="border-t border-gray-200 px-4 py-3 text-sm text-gray-500">Loading…</p>
+  }
+
+  if (!slots || slots.length === 0) {
+    return (
+      <p className="border-t border-gray-200 px-4 py-3 text-sm text-gray-600">
+        No times on this day yet. Open it to add some.
+      </p>
+    )
+  }
+
+  const booked = slots.filter((s) => s.appointment).length
+  const open = slots.filter((s) => !s.appointment && !s.blocked_at).length
+
+  return (
+    <div className="border-t border-gray-200 px-4 py-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+        {booked} booked · {open} open
+      </p>
+      <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
+        {slots.map((slot) => (
+          <li key={slot.id} className="flex items-baseline gap-3 text-sm">
+            <span className="w-20 shrink-0 font-mono text-gray-900">
+              {formatTime(slot.starts_at, timezone)}
+            </span>
+            {slot.appointment ? (
+              <span className="truncate text-gray-900">{slot.appointment.family_name}</span>
+            ) : slot.blocked_at ? (
+              <span className="text-gray-500">Blocked</span>
+            ) : (
+              <span className="text-gray-400">Open</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -212,8 +368,18 @@ function NewDayForm({ wardId, timezone }: { wardId: string; timezone: string }) 
   return (
     <Card>
       <h2 className="mb-4 text-lg font-semibold text-gray-900">Add appointment times</h2>
-      {error && <div className="mb-4"><Alert>{error}</Alert></div>}
-      {result && <div className="mb-4"><Alert tone="success">{result}</Alert></div>}
+      {error && (
+        <div className="mb-4">
+          <Alert onDismiss={() => setError(null)}>{error}</Alert>
+        </div>
+      )}
+      {result && (
+        <div className="mb-4">
+          <Alert tone="success" onDismiss={() => setResult(null)}>
+            {result}
+          </Alert>
+        </div>
+      )}
 
       <form onSubmit={submit} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -313,8 +479,18 @@ function WardSettings({ ward }: { ward: Ward }) {
         reminder message.
       </p>
 
-      {update.error && <div className="mb-4"><Alert>{(update.error as Error).message}</Alert></div>}
-      {saved && <div className="mb-4"><Alert tone="success">Saved.</Alert></div>}
+      {update.error && (
+        <div className="mb-4">
+          <Alert onDismiss={() => update.reset()}>{(update.error as Error).message}</Alert>
+        </div>
+      )}
+      {saved && (
+        <div className="mb-4">
+          <Alert tone="success" onDismiss={() => setSaved(false)}>
+            Saved.
+          </Alert>
+        </div>
+      )}
 
       <form onSubmit={submit} className="space-y-4">
         <Field

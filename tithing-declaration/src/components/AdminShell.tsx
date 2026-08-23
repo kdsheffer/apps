@@ -16,12 +16,15 @@ export function AdminShell({
   subtitle,
   actions,
   children,
+  backTo,
   wide = false,
 }: {
   title: string
   subtitle?: ReactNode
   actions?: ReactNode
   children: ReactNode
+  /** Where "up" is. Drilling into a day otherwise only offers the ward list. */
+  backTo?: { to: string; label: string }
   wide?: boolean
 }) {
   const { user, signOut } = useAuth()
@@ -29,9 +32,17 @@ export function AdminShell({
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow print:hidden">
+      <header className="bg-white shadow">
         <div className={`mx-auto flex ${wide ? 'max-w-7xl' : 'max-w-5xl'} flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between`}>
           <div className="min-w-0">
+            {backTo && (
+              <Link
+                to={backTo.to}
+                className="mb-1 inline-flex items-center gap-1 text-sm font-medium text-blue-700 hover:underline"
+              >
+                <span aria-hidden="true">←</span> {backTo.label}
+              </Link>
+            )}
             <h1 className="truncate text-2xl font-bold text-gray-900">{title}</h1>
             {subtitle && <div className="truncate text-sm text-gray-600">{subtitle}</div>}
           </div>

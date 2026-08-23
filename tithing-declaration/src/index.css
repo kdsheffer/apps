@@ -155,24 +155,3 @@ body {
   }
 }
 
-/* Printing is for taking the evening's roster to the bishopric: drop the app
-   chrome, flatten the cards, and keep an hour from splitting across pages. */
-@media print {
-  body {
-    background: #fff;
-  }
-
-  main {
-    max-width: none !important;
-    padding: 0 !important;
-  }
-
-  .print\:break-inside-avoid {
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-}
-
-@page {
-  margin: 1.5cm;
-}

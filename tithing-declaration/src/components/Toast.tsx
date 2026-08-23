@@ -7,7 +7,7 @@ interface ToastProps {
 
 export function Toast({ tone = 'info', children, onDismiss, action }: ToastProps) {
   return (
-    <div className="fixed inset-x-4 bottom-4 z-40 flex justify-center print:hidden sm:inset-x-auto sm:right-6">
+    <div className="fixed inset-x-4 bottom-4 z-40 flex justify-center sm:inset-x-auto sm:right-6">
       <div
         role="status"
         className={`flex max-w-md items-start gap-3 rounded-lg px-4 py-3 shadow-lg ${

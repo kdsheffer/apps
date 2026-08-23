@@ -35,6 +35,7 @@ export function DayPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmUnpublish, setConfirmUnpublish] = useState(false)
   const [extending, setExtending] = useState(false)
 
   const editable = canEditWard(role)
@@ -100,59 +101,28 @@ export function DayPage() {
     return true
   }
 
-  const togglePublished = () =>
+  const setPublished = (open: boolean) =>
     run(
       updateDay.mutateAsync({
         id: day.id,
-        published_at: day.published_at ? null : new Date().toISOString(),
+        published_at: open ? new Date().toISOString() : null,
       }),
-      day.published_at
-        ? 'Hidden from the booking page.'
-        : 'Open for booking — the link now shows these times.'
+      open
+        ? 'Open for booking — the link now shows these times.'
+        : 'Hidden from the booking page.'
     )
-
-  /**
-   * Push out whatever is already queued, without waiting for the next
-   * scheduled run.
-   *
-   * Deliberately does *not* queue anything. Reminders go out on a schedule now,
-   * a day ahead; a button that could pull them forward would mean somebody
-   * pressing it and texting families at the wrong time. This is only for
-   * impatience about messages that already exist — a confirmation for a booking
-   * just added by hand, usually.
-   */
-  const sendNow = async () => {
-    setError(null)
-    setNotice(null)
-    try {
-      const result = await notifications.dispatch.mutateAsync()
-      if (!result.deployed) {
-        setNotice(
-          "Messages are queued, but delivery isn't set up yet. They'll go out once the dispatch function is deployed."
-        )
-        return
-      }
-      setNotice(
-        result.sent === 0 && result.failed === 0
-          ? 'Nothing was waiting to send.'
-          : `Sent ${result.sent}.` +
-            (result.failed ? ` ${result.failed} failed — see the messages below.` : '')
-      )
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Those messages could not be sent.')
-    }
-  }
 
   return (
     <AdminShell
       wide
+      backTo={{ to: `/wards/${wardId}/schedule`, label: `${ward.name} schedule` }}
       title={formatServiceDate(day.service_date)}
       subtitle={`${ward.name} · ${day.location ?? 'no location set'}`}
       actions={
         editable && (
           <>
             <button
-              onClick={togglePublished}
+              onClick={() => (day.published_at ? setConfirmUnpublish(true) : setPublished(true))}
               className={`rounded px-3 py-2 text-sm font-medium ${
                 day.published_at
                   ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -161,26 +131,16 @@ export function DayPage() {
             >
               {day.published_at ? 'Unpublish' : 'Publish'}
             </button>
-            <button
-              onClick={sendNow}
-              disabled={notifications.dispatch.isPending}
-              title="Reminders send themselves a day ahead. This only pushes out messages already waiting."
-              className="rounded bg-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-300 disabled:opacity-50"
-            >
-              {notifications.pending > 0 ? `Send ${notifications.pending} now` : 'Send now'}
-            </button>
-            <button
-              onClick={() => window.print()}
-              className="rounded bg-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-300"
-            >
-              Print
-            </button>
           </>
         )
       }
     >
-      {error && <Alert>{error}</Alert>}
-      {notice && <Alert tone="success">{notice}</Alert>}
+      {error && <Alert onDismiss={() => setError(null)}>{error}</Alert>}
+      {notice && (
+        <Alert tone="success" onDismiss={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      )}
 
       {!day.published_at && (
         <Alert tone="info">
@@ -216,7 +176,7 @@ export function DayPage() {
       ) : (
         <div className="space-y-5">
           {hours.map((group) => (
-            <Card key={group.hour} className="print:break-inside-avoid print:shadow-none">
+            <Card key={group.hour} >
               <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">
                 {group.hour}
               </h2>
@@ -239,7 +199,7 @@ export function DayPage() {
       )}
 
       {editable && slots && slots.length > 0 && (
-        <Card className="print:hidden">
+        <Card>
           <h2 className="font-semibold text-gray-900">Add another block of times</h2>
           <p className="mb-3 mt-1 text-sm text-gray-600">
             A day can hold as many blocks as you need — one before church and
@@ -265,7 +225,7 @@ export function DayPage() {
       )}
 
       {editable && (
-        <Card className="print:hidden">
+        <Card>
           <h2 className="font-semibold text-gray-900">Remove this day</h2>
           <p className="mt-1 text-sm text-gray-600">
             Deletes the day and all its times. Any booking on it has to be
@@ -284,6 +244,20 @@ export function DayPage() {
       {notifications.list.data && notifications.list.data.length > 0 && (
         <NotificationLog wardId={wardId!} />
       )}
+
+      <ConfirmDialog
+        isOpen={confirmUnpublish}
+        title="Hide this day from members?"
+        message="It disappears from the booking page and nobody new can take a time. Anyone already booked keeps their appointment and is not told."
+        confirmLabel="Unpublish"
+        cancelLabel="Leave it open"
+        isLoading={updateDay.isPending}
+        onCancel={() => setConfirmUnpublish(false)}
+        onConfirm={async () => {
+          await setPublished(false)
+          setConfirmUnpublish(false)
+        }}
+      />
 
       <ConfirmDialog
         isOpen={confirmDelete}
@@ -333,7 +307,7 @@ function SlotRow({
   editable: boolean
   onError: (message: string | null) => void
 }) {
-  const { setSlotBlocked, deleteSlot } = useScheduleMutations(wardId)
+  const { setSlotBlocked } = useScheduleMutations(wardId)
   const { cancelAppointment } = useAppointmentMutations(wardId)
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -391,7 +365,7 @@ function SlotRow({
         </div>
 
         {editable && (
-          <div className="flex shrink-0 flex-wrap gap-2 print:hidden">
+          <div className="flex shrink-0 flex-wrap gap-2">
             {appointment ? (
               <>
                 <button
@@ -430,13 +404,6 @@ function SlotRow({
                   className="rounded bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-300"
                 >
                   {slot.blocked_at ? 'Unblock' : 'Block'}
-                </button>
-                <button
-                  onClick={() => run(deleteSlot.mutateAsync({ slotId: slot.id, dayId }))}
-                  aria-label={`Remove the ${formatTime(slot.starts_at, timezone)} slot`}
-                  className="rounded px-2 py-1 text-xs text-gray-400 hover:bg-gray-200 hover:text-gray-700"
-                >
-                  ✕
                 </button>
               </>
             )}
@@ -550,7 +517,7 @@ function AppointmentForm({
   return (
     <form
       onSubmit={submit}
-      className="mt-3 rounded border border-gray-200 bg-gray-50 p-3 print:hidden"
+      className="mt-3 rounded border border-gray-200 bg-gray-50 p-3"
     >
       {error && <p className="mb-3 text-sm text-red-700">{error}</p>}
       <div className="grid gap-3 sm:grid-cols-3">
@@ -670,7 +637,7 @@ function NotificationLog({ wardId }: { wardId: string }) {
   const rows = (list.data ?? []).slice(0, 25)
 
   return (
-    <Card className="print:hidden">
+    <Card>
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between text-left"

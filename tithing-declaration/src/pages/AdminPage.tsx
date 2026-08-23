@@ -72,8 +72,18 @@ function SiteSettings() {
         nowhere.
       </p>
 
-      {update.error && <div className="mb-4"><Alert>{(update.error as Error).message}</Alert></div>}
-      {saved && <div className="mb-4"><Alert tone="success">Saved.</Alert></div>}
+      {update.error && (
+        <div className="mb-4">
+          <Alert onDismiss={() => update.reset()}>{(update.error as Error).message}</Alert>
+        </div>
+      )}
+      {saved && (
+        <div className="mb-4">
+          <Alert tone="success" onDismiss={() => setSaved(false)}>
+            Saved.
+          </Alert>
+        </div>
+      )}
       {looksLocal && (
         <div className="mb-4">
           <Alert tone="info">
@@ -178,8 +188,18 @@ function CreateWardForm({
   return (
     <Card>
       <h2 className="mb-4 text-lg font-semibold text-gray-900">Create a ward</h2>
-      {error && <div className="mb-4"><Alert>{error}</Alert></div>}
-      {success && <div className="mb-4"><Alert tone="success">{success}</Alert></div>}
+      {error && (
+        <div className="mb-4">
+          <Alert onDismiss={() => setError(null)}>{error}</Alert>
+        </div>
+      )}
+      {success && (
+        <div className="mb-4">
+          <Alert tone="success" onDismiss={() => setSuccess(null)}>
+            {success}
+          </Alert>
+        </div>
+      )}
 
       <form onSubmit={submit} className="space-y-4">
         <Field id="ward-name" label="Ward name" required>
@@ -317,7 +337,11 @@ function PeopleSection({ wards, currentUserId }: { wards: Ward[]; currentUserId:
         />
       </div>
 
-      {error && <div className="mb-4"><Alert>{error}</Alert></div>}
+      {error && (
+        <div className="mb-4">
+          <Alert onDismiss={() => setError(null)}>{error}</Alert>
+        </div>
+      )}
 
       {profiles.isLoading ? (
         <p className="text-sm text-gray-500">Loading people…</p>
