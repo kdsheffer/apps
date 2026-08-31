@@ -196,6 +196,15 @@ Deno.serve(async (request: Request) => {
     const { data, error } = await admin.rpc('queue_due_reminders')
     if (error) return json({ error: `Could not queue reminders: ${error.message}` }, 500)
     queued = (data as number) ?? 0
+
+    // The ward's own day-before report. Separate from reminders because it is
+    // about a day rather than an appointment, and goes to staff rather than
+    // members — but it is due on the same clock, so it rides the same sweep.
+    const digests = await admin.rpc('queue_day_digests')
+    if (digests.error) {
+      return json({ error: `Could not queue reports: ${digests.error.message}` }, 500)
+    }
+    queued += (digests.data as number) ?? 0
   }
 
   // Nothing is sent without credentials, and nothing is discarded either — the

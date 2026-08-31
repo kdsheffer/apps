@@ -137,12 +137,15 @@ export function useScheduleMutations(wardId: string | undefined) {
       start: string
       end: string
       duration?: number
+      rest?: number
     }): Promise<number> => {
+      // Null means "use the ward's default", which the function resolves.
       const { data, error } = await supabase.rpc('generate_slots', {
         p_day_id: input.dayId,
         p_start: input.start,
         p_end: input.end,
-        p_duration: input.duration ?? 15,
+        p_duration: input.duration ?? null,
+        p_rest: input.rest ?? null,
       })
       if (error) throw error
       return data as number

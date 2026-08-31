@@ -28,6 +28,10 @@ export interface Ward {
   contact_name: string | null
   contact_phone: string | null
   reminder_lead_hours: number
+  /** Prefills the add-times form; a one-off block can still use anything. */
+  default_slot_minutes: number
+  /** Buffer at the end of each hour of a block. 0 means back-to-back. */
+  default_rest_minutes: number
   created_at: string
   created_by: string
 }

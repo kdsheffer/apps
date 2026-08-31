@@ -12,6 +12,8 @@ import { TimeWindows } from '../components/TimeWindows'
 import { applyWindows, describeOutcome, firstError, newWindow } from '../lib/timeWindows'
 import type { TimeWindow } from '../lib/timeWindows'
 import { PublicLink } from './WardsPage'
+import { NotificationSwitches } from '../components/NotificationSwitches'
+import { useWardPeople } from '../hooks/useSubscriptions'
 import type { ScheduleDay, Ward } from '../types'
 
 /**
@@ -71,7 +73,16 @@ export function SchedulePage() {
         <PublicLink slug={ward.slug} />
       </Card>
 
-      {editable && <NewDayForm wardId={wardId!} timezone={ward.timezone} />}
+      <WardNotifications wardId={wardId!} canManageOthers={editable} />
+
+      {editable && (
+        <NewDayForm
+          wardId={wardId!}
+          timezone={ward.timezone}
+          defaultSlotMinutes={ward.default_slot_minutes}
+          defaultRestMinutes={ward.default_rest_minutes}
+        />
+      )}
 
       <section>
         <h2 className="mb-3 text-lg font-semibold text-gray-900">Upcoming</h2>
@@ -302,13 +313,27 @@ function DayQuickView({ dayId, timezone }: { dayId: string; timezone: string }) 
  * bottom of the day page, which doesn't sound like it means an afternoon
  * session.
  */
-function NewDayForm({ wardId, timezone }: { wardId: string; timezone: string }) {
+function NewDayForm({
+  wardId,
+  timezone,
+  defaultSlotMinutes,
+  defaultRestMinutes,
+}: {
+  wardId: string
+  timezone: string
+  defaultSlotMinutes: number
+  defaultRestMinutes: number
+}) {
   const { createDay, generateSlots } = useScheduleMutations(wardId)
   const { data: days } = useScheduleDays(wardId)
   const [open, setOpen] = useState(false)
   const [serviceDate, setServiceDate] = useState(todayInZone(timezone))
   const [location, setLocation] = useState("Bishop's office")
   const [windows, setWindows] = useState<TimeWindow[]>([newWindow()])
+  // Prefilled from the ward, so the usual shape is set once rather than retyped
+  // at every evening — but still editable for a one-off block.
+  const [duration, setDuration] = useState(String(defaultSlotMinutes))
+  const [rest, setRest] = useState(String(defaultRestMinutes))
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
 
@@ -345,7 +370,13 @@ function NewDayForm({ wardId, timezone }: { wardId: string; timezone: string }) 
       const day = existing ?? (await createDay.mutateAsync({ serviceDate, location }))
 
       const outcome = await applyWindows(windows, (window) =>
-        generateSlots.mutateAsync({ dayId: day.id, start: window.start, end: window.end })
+        generateSlots.mutateAsync({
+          dayId: day.id,
+          start: window.start,
+          end: window.end,
+          duration: Number(duration),
+          rest: Number(rest),
+        })
       )
 
       const dateLabel = formatServiceDate(serviceDate)
@@ -416,9 +447,39 @@ function NewDayForm({ wardId, timezone }: { wardId: string; timezone: string }) 
 
         <TimeWindows windows={windows} onChange={setWindows} idPrefix="new-day" />
 
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field id="new-duration" label="Appointment length" hint="Minutes">
+            <input
+              id="new-duration"
+              type="number"
+              min={5}
+              max={60}
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+          <Field
+            id="new-rest"
+            label="Rest each hour"
+            hint="Buffer at the end of every hour of a block. 0 for back-to-back."
+          >
+            <input
+              id="new-rest"
+              type="number"
+              min={0}
+              max={55}
+              value={rest}
+              onChange={(e) => setRest(e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+        </div>
+
         <p className="rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-          Three appointments an hour, at :00, :15 and :30. The last quarter of
-          each hour is left as buffer, so nothing is scheduled at :45.
+          Appointments run back-to-back from the start of each block, with the
+          last {rest || 0} minutes of every hour left free. Measured from when
+          the block starts, so a block beginning at 6:45 rests at 7:30.
           <br />
           Need a morning block and an afternoon one? Add the first, then come
           back and add the second to the same date.
@@ -449,6 +510,77 @@ function NewDayForm({ wardId, timezone }: { wardId: string; timezone: string }) 
   )
 }
 
+// --- Who hears about what ---------------------------------------------------
+
+/**
+ * The ward's notification switches, one row per person with access.
+ *
+ * Lives on the schedule rather than in the admin console because it is a ward
+ * decision, made by the people running that ward, and most of them never see
+ * the console. A manager can set anybody's; everybody can set their own.
+ */
+function WardNotifications({
+  wardId,
+  canManageOthers,
+}: {
+  wardId: string
+  canManageOthers: boolean
+}) {
+  const { data: people, isLoading } = useWardPeople(wardId)
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Card>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between text-left"
+      >
+        <span>
+          <span className="block font-semibold text-gray-900">Email notifications</span>
+          <span className="block text-sm text-gray-600">
+            Who hears about bookings, and who gets the day-before report
+          </span>
+        </span>
+        <span className="text-sm text-gray-500">{open ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-4">
+          {isLoading ? (
+            <p className="text-sm text-gray-500">Loading…</p>
+          ) : (
+            <ul className="divide-y divide-gray-200">
+              {(people ?? []).map((person) => (
+                <li key={person.id} className="py-3">
+                  <p className="text-sm font-medium text-gray-900">
+                    {person.email ?? person.id}
+                    {person.full_name && (
+                      <span className="ml-2 font-normal text-gray-500">{person.full_name}</span>
+                    )}
+                  </p>
+                  <div className="mt-2">
+                    <NotificationSwitches
+                      wardId={wardId}
+                      userId={person.id}
+                      label={person.email ?? 'this person'}
+                      canEdit={canManageOthers || person.isSelf}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 text-xs text-gray-500">
+            Only people with access to this ward can be listed here — a
+            notification carries names, phone numbers and email addresses.
+          </p>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // --- Ward settings ----------------------------------------------------------
 
 function WardSettings({ ward }: { ward: Ward }) {
@@ -456,6 +588,8 @@ function WardSettings({ ward }: { ward: Ward }) {
   const [instructions, setInstructions] = useState(ward.instructions ?? '')
   const [contactName, setContactName] = useState(ward.contact_name ?? '')
   const [contactPhone, setContactPhone] = useState(ward.contact_phone ?? '')
+  const [slotMinutes, setSlotMinutes] = useState(String(ward.default_slot_minutes))
+  const [restMinutes, setRestMinutes] = useState(String(ward.default_rest_minutes))
   const [saved, setSaved] = useState(false)
 
   const submit = (event: React.FormEvent) => {
@@ -467,6 +601,8 @@ function WardSettings({ ward }: { ward: Ward }) {
         instructions: instructions.trim() || null,
         contact_name: contactName.trim() || null,
         contact_phone: contactPhone.trim() || null,
+        default_slot_minutes: Number(slotMinutes),
+        default_rest_minutes: Number(restMinutes),
       },
       { onSuccess: () => setSaved(true) }
     )
@@ -524,6 +660,39 @@ function WardSettings({ ward }: { ward: Ward }) {
               type="tel"
               value={contactPhone}
               onChange={(e) => setContactPhone(e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            id="slot-minutes"
+            label="Appointment length"
+            hint="Minutes. Prefills the form when you add times."
+          >
+            <input
+              id="slot-minutes"
+              type="number"
+              min={5}
+              max={60}
+              value={slotMinutes}
+              onChange={(e) => setSlotMinutes(e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+          <Field
+            id="rest-minutes"
+            label="Rest each hour"
+            hint="Minutes of buffer at the end of every hour of a block. 0 for back-to-back."
+          >
+            <input
+              id="rest-minutes"
+              type="number"
+              min={0}
+              max={55}
+              value={restMinutes}
+              onChange={(e) => setRestMinutes(e.target.value)}
               className={inputClass}
             />
           </Field>

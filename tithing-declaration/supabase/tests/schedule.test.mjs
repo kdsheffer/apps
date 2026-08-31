@@ -326,3 +326,130 @@ test('removing a day people have booked', async (t) => {
     assert.match(message, /is booked at that time/)
   })
 })
+
+test('configurable appointment length and rest', async (t) => {
+  const db = await startDatabase()
+  const { client } = db
+  t.after(() => db.stop())
+
+  /** Generate into a fresh day and read back the wall-clock times. */
+  const pattern = async (slug, { start, end, duration = null, rest = null }) => {
+    const { day, admin } = await seedWard(client, { slug, start: '00:00', end: '00:15' })
+    await client.query('delete from public.slots where day_id = $1', [day.id])
+
+    await asUser(client, admin, () =>
+      client.query('select public.generate_slots($1, $2, $3, $4, $5)', [
+        day.id, start, end, duration, rest,
+      ])
+    )
+    const { rows } = await client.query(
+      'select starts_at from public.slots where day_id = $1 order by starts_at',
+      [day.id]
+    )
+    const times = []
+    for (const row of rows) times.push(await localTime(client, row.starts_at))
+    return times
+  }
+
+  await t.test('the defaults still give three an hour with a quarter of rest', async () => {
+    assert.deepEqual(await pattern('cfg-default', { start: '18:00', end: '20:30' }), [
+      '18:00', '18:15', '18:30',
+      '19:00', '19:15', '19:30',
+      '20:00', '20:15',
+    ])
+  })
+
+  await t.test('rest is measured from the start of the block, not the clock', async () => {
+    // The bug this fixes: a block starting at 18:45 used to lose its first
+    // quarter hour, because rest was hardcoded to the :45 mark of the clock.
+    assert.deepEqual(await pattern('cfg-offset', { start: '18:45', end: '20:45' }), [
+      '18:45', '19:00', '19:15',   // rest 19:30–19:45
+      '19:45', '20:00', '20:15',   // rest 20:30–20:45
+    ])
+  })
+
+  await t.test('no rest means back-to-back', async () => {
+    assert.deepEqual(await pattern('cfg-norest', { start: '09:00', end: '10:00', rest: 0 }), [
+      '09:00', '09:15', '09:30', '09:45',
+    ])
+  })
+
+  await t.test('a longer appointment fits fewer in an hour', async () => {
+    assert.deepEqual(
+      await pattern('cfg-long', { start: '18:00', end: '20:00', duration: 20, rest: 0 }),
+      ['18:00', '18:20', '18:40', '19:00', '19:20', '19:40']
+    )
+  })
+
+  await t.test('a shorter appointment fits more', async () => {
+    assert.deepEqual(
+      await pattern('cfg-short', { start: '18:00', end: '19:00', duration: 10, rest: 10 }),
+      ['18:00', '18:10', '18:20', '18:30', '18:40']
+    )
+  })
+
+  await t.test('the appointment length is recorded on the slot', async () => {
+    const { day, admin } = await seedWard(client, { slug: 'cfg-recorded' })
+    await asUser(client, admin, () =>
+      client.query(`select public.generate_slots($1, '09:00'::time, '10:00'::time, 20, 0)`, [day.id])
+    )
+    const { rows } = await client.query(
+      `select distinct duration_minutes from public.slots
+        where day_id = $1 and duration_minutes = 20`,
+      [day.id]
+    )
+    assert.equal(rows.length, 1)
+  })
+
+  await t.test('an appointment that cannot fit its hour is refused, not silently dropped', async () => {
+    const { day, admin } = await seedWard(client, { slug: 'cfg-toolong' })
+    const message = await asUser(client, admin, () =>
+      errorFrom(() =>
+        client.query(`select public.generate_slots($1, '18:00'::time, '21:00'::time, 50, 15)`, [day.id])
+      )
+    )
+    assert.match(message, /does not fit in an hour/i)
+  })
+
+  await t.test('nonsense values are refused', async () => {
+    const { day, admin } = await seedWard(client, { slug: 'cfg-bad' })
+    await asUser(client, admin, async () => {
+      assert.match(
+        await errorFrom(() =>
+          client.query(`select public.generate_slots($1, '18:00'::time, '20:00'::time, 2, 0)`, [day.id])
+        ),
+        /between 5 and 60 minutes/i
+      )
+      assert.match(
+        await errorFrom(() =>
+          client.query(`select public.generate_slots($1, '18:00'::time, '20:00'::time, 15, 90)`, [day.id])
+        ),
+        /between 0 and 55/i
+      )
+    })
+  })
+
+  await t.test('the ward supplies the defaults when none are given', async () => {
+    const { ward, day, admin } = await seedWard(client, { slug: 'cfg-warddefaults' })
+    await client.query(
+      'update public.wards set default_slot_minutes = 20, default_rest_minutes = 0 where id = $1',
+      [ward.id]
+    )
+    await client.query('delete from public.slots where day_id = $1', [day.id])
+
+    await asUser(client, admin, () =>
+      client.query(`select public.generate_slots($1, '09:00'::time, '10:00'::time)`, [day.id])
+    )
+    const { rows } = await client.query(
+      'select starts_at from public.slots where day_id = $1 order by starts_at',
+      [day.id]
+    )
+    const times = []
+    for (const row of rows) times.push(await localTime(client, row.starts_at))
+    assert.deepEqual(times, ['09:00', '09:20', '09:40'])
+  })
+
+  await t.test('a block shorter than one appointment produces nothing', async () => {
+    assert.deepEqual(await pattern('cfg-tiny', { start: '18:00', end: '18:10', rest: 0 }), [])
+  })
+})

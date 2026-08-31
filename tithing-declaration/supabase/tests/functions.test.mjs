@@ -35,6 +35,7 @@ const ANON_MAY_EXECUTE = [
   'is_super_admin',
   'is_ward_admin',
   'is_ward_member',
+  'has_ward_access',
   'shares_administered_ward',
   'ward_of_day',
   'ward_of_slot',
@@ -53,6 +54,8 @@ const AUTHENTICATED_EXTRA = [
 const NOBODY_ELSE = [
   'appointment_url',
   'check_rate_limit',
+  'queue_booking_alerts',
+  'queue_day_digests',
   'queue_due_reminders',
   'request_fingerprint',
   'site_url',

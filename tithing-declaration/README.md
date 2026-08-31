@@ -39,8 +39,9 @@ it to anybody who can type.
   booked rather than being offered to anyone who can type a phone number.
 - **Signed-in members** see their appointment under **My appointment** and can
   cancel it there. A booking made signed out can be claimed onto an account.
-- **Slot generation** — three appointments an hour at :00, :15 and :30, with the
-  last quarter of each hour left as buffer. Nothing exists at :45.
+- **Slot generation** — back-to-back appointments with a configurable rest at
+  the end of each hour. Defaults to 15-minute appointments and 15 minutes of
+  rest, which is three an hour.
 - **Schedule management** — publish a day when it's ready, block a slot, extend
   an evening, add somebody by hand, cancel a booking, print the roster.
 - **Automatic email** — a confirmation on booking, and a reminder the day
@@ -48,8 +49,10 @@ it to anybody who can type.
   presses anything.
 - **Bookings by hand** — the secretary can add a family from a name alone, with
   phone and email optional, for somebody who rang up.
-- **Roles** — system admin, executive secretary (edit one ward), bishopric
-  (read one ward). Enforced by row-level security, not by hidden buttons.
+- **Roles** — system admin, manager (edit one ward), viewer (read one ward).
+  Enforced by row-level security, not by hidden buttons.
+- **Staff notifications** — opt in to an email on every booking, or the
+  day-before report listing who is coming and which times are empty.
 - **Multi-ward** — wards are isolated from each other by RLS.
 
 ## Tech stack
@@ -120,12 +123,31 @@ The app runs at `http://localhost:5174`.
 
 1. **/wards → Open schedule → Add a declaration day.** Give it a date, a
    location, and the hours you'll be there.
-2. The times are generated: three an hour at :00, :15 and :30. The end time is
-   when the evening *finishes*, so 6:00pm–8:30pm gives a last appointment at
-   8:15pm.
+2. The times are generated. By default that is three an hour — 15-minute
+   appointments with 15 minutes of rest — and both are editable on the form. The
+   end time is when the block *finishes*, so 6:00pm–8:30pm gives a last
+   appointment at 8:15pm.
 3. Block anything you don't want bookable, then **Publish**. Until you publish,
    members can't see the day at all.
 4. Copy the booking link and send it round.
+
+### Appointment length and rest
+
+Two numbers, prefilled from the ward's settings and editable per block:
+
+| | |
+| --- | --- |
+| **Appointment length** | How long each one is. Default 15 minutes. |
+| **Rest each hour** | Buffer at the end of every hour of the block, so a long interview doesn't push the evening back. Default 15 minutes. 0 gives back-to-back appointments. |
+
+The rest is measured **from the start of the block, not the clock**. A block
+beginning at 6:45 rests at 7:30–7:45 and resumes at 7:45 — it does not lose its
+first quarter hour to a rule about the :45 mark, which is what the old hardcoded
+pattern did.
+
+Appointments run back-to-back from the top of each hour of the block until the
+rest begins, so a 20-minute appointment with no rest gives three an hour, and a
+20-minute appointment with 15 minutes of rest gives two.
 
 ### More than one block on a day
 
@@ -238,8 +260,37 @@ granted anything, because the grant attaches to a `profiles` row that only
 exists after a first sign-in.
 
 Once they have, **/admin → People** lists them. Find them, choose the ward, pick
-**Executive secretary**, and press Grant. Leave **System admin** unticked — that
-is the one grant that reaches every ward.
+**Manager** or **Viewer**, and press Grant. Leave **System admin** unticked —
+that is the one grant that reaches every ward.
+
+A bishop who wants edit rights is a Manager. There is no separate role for the
+calling, because roles say what somebody may *do* and the calling does not
+determine that: a bishop may want read-only, a clerk may need full edit.
+
+### Who hears about what
+
+Separate from roles, and deliberately so. Being able to change the schedule and
+wanting an email about every booking are different questions — both counsellors
+may want the day-before report without either needing edit rights, and a
+secretary may find per-booking email too noisy in the last week without wanting
+to give up managing the schedule.
+
+**Schedule → Email notifications** lists everybody with access to the ward and
+two switches each:
+
+| | |
+| --- | --- |
+| **Every booking** | An email as somebody takes a time, with their name, phone, email and any note |
+| **Day-before report** | One email 24 hours before each day, listing every time and who holds it — including the empty ones |
+
+The report's blank rows are the point: an evening nobody has signed up for is
+exactly the case a per-booking alert can never tell you about, and the report
+says so in as many words.
+
+A manager can set anybody's switches; everybody can set their own. Only people
+who already have access to the ward can be subscribed — a notification carries
+family names and phone numbers, and the database refuses to send them to an
+account with no business in the ward.
 
 ### What ward isolation actually means
 

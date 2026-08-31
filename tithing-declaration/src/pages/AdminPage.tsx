@@ -10,9 +10,15 @@ import { Alert, Card } from '../components/PageShell'
 import { Field, inputClass } from '../components/Field'
 import type { Profile, Ward, WardRole, WardRoleName } from '../types'
 
+/**
+ * What a role lets somebody *do*. Named for the capability rather than the
+ * calling, because "Executive Secretary" stops being true the moment a bishop
+ * needs edit rights or a clerk needs read. What somebody is *told* is a
+ * separate question, answered by the notification switches below.
+ */
 const ROLE_LABEL: Record<WardRoleName, string> = {
-  admin: 'Executive secretary',
-  viewer: 'Bishopric (read-only)',
+  admin: 'Manager — full edit',
+  viewer: 'Viewer — read only',
 }
 
 /** Turns "Riverbend 3rd Ward" into "riverbend-3rd-ward" for the public link. */
@@ -321,8 +327,8 @@ function PeopleSection({ wards, currentUserId }: { wards: Ward[]; currentUserId:
           <h2 className="text-lg font-semibold text-gray-900">People</h2>
           <p className="mt-1 max-w-2xl text-sm text-gray-600">
             Everyone who has signed in. <strong>System admin</strong> can do anything in every
-            ward. <strong>Executive secretary</strong> builds and manages one ward's schedule.{' '}
-            <strong>Bishopric</strong> can see it but change nothing. There's no invite —
+            ward. <strong>Manager</strong> builds and manages one ward's schedule.{' '}
+            <strong>Viewer</strong> can see it but change nothing. There's no invite —
             somebody has to sign in once before they appear here.
           </p>
           <p className="mt-2 max-w-2xl text-sm text-gray-500">
