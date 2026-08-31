@@ -105,9 +105,30 @@ export function useWardPeople(wardId: string | undefined) {
       if (profilesError) throw profilesError
 
       type Row = { id: string; email: string | null; full_name: string | null }
-      return (profiles as Row[])
-        .map((p) => ({ ...p, isSelf: p.id === user?.id }))
-        .sort((a, b) => (a.email ?? '').localeCompare(b.email ?? ''))
+      const people = (profiles as Row[]).map((p) => ({ ...p, isSelf: p.id === user?.id }))
+
+      /* A system admin has access to every ward without holding a role in any
+       * of them, so they never appear in this list — and could not subscribe
+       * themselves to a ward they administer. Add them when they're missing;
+       * the database is the authority on whether the subscription is allowed. */
+      if (user && !people.some((p) => p.id === user.id)) {
+        const { data: me } = await supabase
+          .from('profiles')
+          .select('id, email, full_name, is_super_admin')
+          .eq('id', user.id)
+          .maybeSingle()
+        const self = me as (Row & { is_super_admin: boolean }) | null
+        if (self?.is_super_admin) {
+          people.push({
+            id: self.id,
+            email: self.email,
+            full_name: self.full_name,
+            isSelf: true,
+          })
+        }
+      }
+
+      return people.sort((a, b) => (a.email ?? '').localeCompare(b.email ?? ''))
     },
     enabled: !!wardId,
   })

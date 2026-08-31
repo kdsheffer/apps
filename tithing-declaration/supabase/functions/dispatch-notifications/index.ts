@@ -120,14 +120,18 @@ Deno.serve(async (request: Request) => {
 
   let wardId: string | undefined
   let appointmentToken: string | undefined
-  /* Sent by the database trigger, which already knows the id and has already
-     authenticated with the service role key. */
+  /* Sent by the database trigger, which already knows what to deliver and has
+     already authenticated with the service role key. `notification_id` is the
+     precise form — a staff alert belongs to a ward rather than an appointment,
+     so it has no appointment to be scoped by. */
   let directAppointmentId: string | undefined
+  let notificationId: string | undefined
   try {
     const payload = (await request.json().catch(() => ({}))) ?? {}
     wardId = payload.ward_id
     appointmentToken = payload.appointment_token
     directAppointmentId = payload.appointment_id
+    notificationId = payload.notification_id
   } catch {
     /* no body: a scheduled run */
   }
@@ -161,6 +165,9 @@ Deno.serve(async (request: Request) => {
     appointmentId = directAppointmentId
   }
 
+  // A trigger naming one message means exactly that message, and no sweep.
+  const targeted = scheduled && Boolean(notificationId || directAppointmentId)
+
   if (!scheduled) {
     if (appointmentToken) {
       // Knowing the token is what authorizes cancelling; scoping a send to the
@@ -192,7 +199,7 @@ Deno.serve(async (request: Request) => {
      exists — neither gets to pull tomorrow's reminders forward, which is what
      keeps reminders on the clock rather than on whatever somebody just did. */
   let queued = 0
-  if (scheduled && !directAppointmentId) {
+  if (scheduled && !targeted) {
     const { data, error } = await admin.rpc('queue_due_reminders')
     if (error) return json({ error: `Could not queue reminders: ${error.message}` }, 500)
     queued = (data as number) ?? 0
@@ -227,6 +234,7 @@ Deno.serve(async (request: Request) => {
     p_ward_id: scheduled ? null : wardId ?? null,
     p_appointment_id: appointmentId,
     p_limit: BATCH,
+    p_notification_id: notificationId ?? null,
   })
   if (error) return json({ error: error.message }, 500)
 

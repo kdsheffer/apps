@@ -570,6 +570,16 @@ npm run preview  # serve the production build
 npm test         # pure unit tests, no database
 ```
 
+### Re-running a migration
+
+Don't. They form a linear history and each is meant to run once, in order — a
+later one may drop a column an earlier one sets a default on, so re-running an
+old file fails partway through. It fails loudly rather than destructively, but
+the right recovery is to run only what hasn't been run.
+
+`supabase/tests/` proves the whole sequence applies cleanly from empty on every
+run, which is the property that actually matters.
+
 ### Testing the migrations
 
 `supabase/tests/` runs every migration against a throwaway Postgres and asserts

@@ -32,12 +32,6 @@ export function formatDayLong(iso: string, timeZone: string): string {
   )
 }
 
-/** "Sun, Oct 12" — for lists, where the long form crowds everything else out. */
-export function formatDayShort(iso: string, timeZone: string): string {
-  return formatter(timeZone, { weekday: 'short', month: 'short', day: 'numeric' }).format(
-    new Date(iso)
-  )
-}
 
 /** "Sunday, October 12 at 6:15 PM" — the phrasing the emails use. */
 export function formatSlot(iso: string, timeZone: string): string {

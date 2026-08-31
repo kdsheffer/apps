@@ -61,15 +61,6 @@ export function useDaySlots(dayId: string | undefined) {
   })
 }
 
-/** Everyone booked on a day, in time order — the list to work down on the night. */
-export function useDayRoster(dayId: string | undefined) {
-  const slots = useDaySlots(dayId)
-  return {
-    ...slots,
-    roster: (slots.data ?? []).filter((s) => s.appointment !== null),
-  }
-}
-
 export function useScheduleMutations(wardId: string | undefined) {
   const queryClient = useQueryClient()
 

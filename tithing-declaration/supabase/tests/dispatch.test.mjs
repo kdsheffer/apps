@@ -253,6 +253,27 @@ test('dispatching the instant a message is written', async (t) => {
     assert.equal(queuedRows.rows[0].status, 'queued')
   })
 
+  await t.test('every kind a person just caused is dispatched, not only two', async () => {
+    /* The bug this catches: the trigger named the kinds it acted on, and the
+       list stopped being complete as `reschedule` and `booking` were added.
+       Naming the exceptions instead means a kind added later is immediate
+       unless somebody decides otherwise. */
+    const { rows } = await client.query(
+      `select pg_get_functiondef(p.oid) as src
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = 'dispatch_notification_now'`
+    )
+    const src = rows[0].src
+    assert.match(src, /kind in \('reminder', 'digest'\)/,
+      'the trigger should skip a named few, not allow a named few')
+    for (const kind of ['confirmation', 'cancellation', 'reschedule', 'booking']) {
+      assert.equal(
+        new RegExp(`not in [^)]*'${kind}'`).test(src), false,
+        `${kind} should not be excluded from immediate dispatch`
+      )
+    }
+  })
+
   await t.test('the trigger ignores reminders', async () => {
     // Reminders belong to the schedule. One sent the moment it is queued is one
     // sent at whatever hour the scheduler happened to wake up.

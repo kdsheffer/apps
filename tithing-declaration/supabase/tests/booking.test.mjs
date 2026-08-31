@@ -69,14 +69,34 @@ test('booking', async (t) => {
     await seedWard(client, { slug: 'notables' })
 
     await asAnon(client, async () => {
+      /* Every table, listed explicitly and checked below against the schema —
+         a table added later must not quietly escape this sweep. */
       for (const table of [
         'wards', 'schedule_days', 'slots', 'appointments',
         'notifications', 'ward_roles', 'profiles', 'lookup_attempts',
+        'app_settings', 'app_secrets', 'notification_subscriptions',
       ]) {
         const message = await errorFrom(() => client.query(`select * from public.${table}`))
         assert.match(message, /permission denied/i, `anon could read ${table}`)
       }
     })
+  })
+
+  await t.test('the sweep above covers every table there is', async () => {
+    // Without this, adding a table and forgetting to list it above leaves a
+    // gap that reads as a passing test.
+    const { rows } = await client.query(
+      `select tablename from public.pg_tables_shim`
+    ).catch(async () => client.query(
+      `select tablename from pg_tables where schemaname = 'public' order by tablename`
+    ))
+    const swept = new Set([
+      'wards', 'schedule_days', 'slots', 'appointments',
+      'notifications', 'ward_roles', 'profiles', 'lookup_attempts',
+      'app_settings', 'app_secrets', 'notification_subscriptions',
+    ])
+    const missed = rows.map((r) => r.tablename).filter((t) => !swept.has(t))
+    assert.deepEqual(missed, [], 'these tables are not checked against anon')
   })
 
   await t.test('two people racing for one slot: exactly one wins', async () => {

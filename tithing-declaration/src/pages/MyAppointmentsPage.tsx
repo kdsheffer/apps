@@ -1,4 +1,3 @@
-import { Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useMyAppointments } from '../hooks/useAppointments'
 import { useCancelAppointment } from '../hooks/usePublicSchedule'
@@ -121,10 +120,3 @@ function MyAppointmentCard({ appointment }: { appointment: Row }) {
   )
 }
 
-export function MemberHomeLink({ slug }: { slug: string }) {
-  return (
-    <Link to={`/w/${slug}`} className="font-medium text-blue-700 underline">
-      Book a time
-    </Link>
-  )
-}
