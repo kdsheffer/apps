@@ -514,3 +514,109 @@ test('a message cannot be queued twice', async (t) => {
     assert.equal(rows[0].n, 1, 'the replacement reminder was blocked by the one it replaced')
   })
 })
+
+test('the send state machine', async (t) => {
+  const db = await startDatabase()
+  const { client } = db
+  t.after(() => db.stop())
+
+  const queuedMessage = async (slug) => {
+    const { ward, slots } = await seedWard(client, { slug })
+    await asAnon(client, () =>
+      client.query('select * from public.book_slot($1, $2, $3, $4, $5)', [
+        slug, slots[0].id, 'Pratt', '8015551601', 'pratt@example.test',
+      ])
+    )
+    const { rows } = await client.query(
+      `select id from public.notifications where ward_id = $1 and status = 'queued'`,
+      [ward.id]
+    )
+    return rows[0].id
+  }
+
+  const setStatus = async (id, status) => {
+    try {
+      await client.query('update public.notifications set status = $2 where id = $1', [id, status])
+      return 'allowed'
+    } catch (e) {
+      return e.message
+    }
+  }
+
+  await t.test('a queued message cannot jump straight to sent', async () => {
+    /* The whole point. A dispatcher that selects queued rows, sends them and
+       marks them afterwards works in testing and silently double-sends
+       whenever two of them overlap — which is what actually happened. */
+    const id = await queuedMessage('sm-jump')
+    const result = await setStatus(id, 'sent')
+    assert.match(result, /cannot go from queued to sent/)
+    assert.match(result, /claim_notifications/)
+  })
+
+  await t.test('the legal path works end to end', async () => {
+    const id = await queuedMessage('sm-legal')
+    const claimed = await client.query('select * from public.claim_notifications(null, null, 50, $1)', [id])
+    assert.equal(claimed.rows.length, 1)
+    assert.equal(await setStatus(id, 'sent'), 'allowed')
+  })
+
+  await t.test('a failed attempt can go back for another go, then give up', async () => {
+    const id = await queuedMessage('sm-retry')
+    await client.query('select * from public.claim_notifications(null, null, 50, $1)', [id])
+    assert.equal(await setStatus(id, 'queued'), 'allowed')
+    await client.query('select * from public.claim_notifications(null, null, 50, $1)', [id])
+    assert.equal(await setStatus(id, 'failed'), 'allowed')
+  })
+
+  await t.test('a delivered message can still be set aside by a reschedule', async () => {
+    const id = await queuedMessage('sm-skip')
+    await client.query('select * from public.claim_notifications(null, null, 50, $1)', [id])
+    await setStatus(id, 'sent')
+    assert.equal(await setStatus(id, 'skipped'), 'allowed')
+  })
+
+  await t.test('a reschedule sets aside a sent reminder without tripping the rule', async () => {
+    // The interaction worth checking: reschedule_appointment moves reminders
+    // out of the way from several states at once.
+    const { ward, day } = await seedWard(client, { slug: 'sm-reschedule' })
+    await client.query('delete from public.slots where day_id = $1', [day.id])
+    const made = []
+    for (const mins of [20 * 60, 21 * 60]) {
+      const { rows: [slot] } = await client.query(
+        `insert into public.slots (day_id, starts_at)
+         values ($1, now() + make_interval(mins => $2)) returning *`,
+        [day.id, mins]
+      )
+      made.push(slot)
+    }
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, email)
+       values ($1, $2, 'Snow', 'snow@example.test')`,
+      [made[0].id, ward.id]
+    )
+    await client.query('select public.queue_due_reminders()')
+
+    const { rows: [n] } = await client.query(
+      `select id from public.notifications where ward_id = $1 and kind = 'reminder'`,
+      [ward.id]
+    )
+    await client.query('select * from public.claim_notifications(null, null, 50, $1)', [n.id])
+    await client.query(`update public.notifications set status = 'sent' where id = $1`, [n.id])
+
+    const { rows: [appt] } = await client.query(
+      'select cancel_token from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+    await asAnon(client, () =>
+      client.query('select * from public.reschedule_appointment($1, $2)', [
+        appt.cancel_token, made[1].id,
+      ])
+    )
+
+    const { rows } = await client.query(
+      'select status from public.notifications where id = $1',
+      [n.id]
+    )
+    assert.equal(rows[0].status, 'skipped')
+  })
+})

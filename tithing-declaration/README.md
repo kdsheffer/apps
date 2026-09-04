@@ -354,7 +354,19 @@ one booking writes two rows, and each asks for delivery. A key that must be
 unique cannot be raced. Repeats that are legitimate, like a second reschedule
 notice, simply carry no key.
 
-**Every message is sent exactly once.** The dispatcher *claims* a batch —
+**Every message is sent exactly once**, and the database enforces the mechanism
+rather than trusting it. Delivery must *claim* a message — one statement moving
+it from `queued` to `sending`, using `for update skip locked` so two dispatchers
+take disjoint work. A state-machine trigger refuses any other road to `sent`.
+
+That trigger exists because the guarantee used to live entirely in the Edge
+Function, where a version that selected queued rows and marked them afterwards
+worked perfectly in testing, raised no error, and silently sent every message
+twice whenever two dispatches overlapped. An old deployment stayed live through
+several migrations and the first symptom was a bishopric inbox with two copies
+of the same alert. `queued → sent` is now a refusal, not an ordinary UPDATE.
+
+ The dispatcher *claims* a batch —
 `claim_notifications()` flips rows to `sending` in one statement using
 `for update skip locked` — rather than selecting rows and marking them
 afterwards. The older approach left a window in which a second dispatcher saw
