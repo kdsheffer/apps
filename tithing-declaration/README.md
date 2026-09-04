@@ -346,6 +346,14 @@ The trigger can never cost you a booking: an unconfigured project, a missing
 pg_net, or a call that fails all leave the message queued for the scheduled run,
 because an exception there would roll back the appointment itself.
 
+**Every message is queued at most once**, enforced by a unique index on
+`notifications.dedupe_key` rather than by asking "does one already exist?"
+before inserting. That question and its answer are separated by enough time for
+another connection to ask it too, and two dispatchers run together routinely —
+one booking writes two rows, and each asks for delivery. A key that must be
+unique cannot be raced. Repeats that are legitimate, like a second reschedule
+notice, simply carry no key.
+
 **Every message is sent exactly once.** The dispatcher *claims* a batch —
 `claim_notifications()` flips rows to `sending` in one statement using
 `for update skip locked` — rather than selecting rows and marking them

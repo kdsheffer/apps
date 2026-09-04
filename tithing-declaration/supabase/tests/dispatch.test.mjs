@@ -337,3 +337,180 @@ test('dispatching the instant a message is written', async (t) => {
     assert.deepEqual(rows.map((r) => r.kind), ['confirmation', 'cancellation'])
   })
 })
+
+test('a message cannot be queued twice', async (t) => {
+  const db = await startDatabase()
+  const { client } = db
+  t.after(() => db.stop())
+
+  /**
+   * Every "don't send this twice" rule used to be a check-then-insert, which
+   * two connections can both pass. And two dispatchers run together routinely:
+   * one booking writes two notification rows, and each asks for delivery.
+   *
+   * These drive the queueing functions from two real connections, which is the
+   * only way to show the difference between a check and a constraint.
+   */
+  const dayWithBooking = async (slug, hoursAway) => {
+    const { ward, day, admin } = await seedWard(client, { slug })
+    await client.query('delete from public.slots where day_id = $1', [day.id])
+    const { rows: [slot] } = await client.query(
+      `insert into public.slots (day_id, starts_at)
+       values ($1, now() + make_interval(mins => $2)) returning *`,
+      [day.id, Math.round(hoursAway * 60)]
+    )
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, email)
+       values ($1, $2, 'Pratt', 'pratt@example.test')`,
+      [slot.id, ward.id]
+    )
+    return { ward, day, admin }
+  }
+
+  const count = (wardId, kind) =>
+    client
+      .query(
+        `select count(*)::int as n from public.notifications where ward_id = $1 and kind = $2`,
+        [wardId, kind]
+      )
+      .then(({ rows }) => rows[0].n)
+
+  await t.test('two sweeps at once queue one reminder, not two', async () => {
+    const { ward } = await dayWithBooking('dup-reminder', 20)
+    const other = await db.newClient()
+
+    await client.query('begin')
+    await other.query('begin')
+    await client.query('select public.queue_due_reminders()')
+    await other.query('select public.queue_due_reminders()')
+    await client.query('commit')
+    await other.query('commit')
+
+    assert.equal(await count(ward.id, 'reminder'), 1)
+  })
+
+  await t.test('two sweeps at once queue one report, not two', async () => {
+    const { ward, admin } = await dayWithBooking('dup-digest', 20)
+    await client.query(
+      `insert into public.notification_subscriptions (ward_id, user_id, kind)
+       values ($1, $2, 'digest')`,
+      [ward.id, admin]
+    )
+    const other = await db.newClient()
+
+    await client.query('begin')
+    await other.query('begin')
+    await client.query('select public.queue_day_digests()')
+    await other.query('select public.queue_day_digests()')
+    await client.query('commit')
+    await other.query('commit')
+
+    assert.equal(await count(ward.id, 'digest'), 1)
+  })
+
+  await t.test('a booking alert cannot be queued twice for one recipient', async () => {
+    const { ward, admin, slots } = await seedWard(client, { slug: 'dup-alert' })
+    await client.query(
+      `insert into public.notification_subscriptions (ward_id, user_id, kind)
+       values ($1, $2, 'booking')`,
+      [ward.id, admin]
+    )
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name)
+       values ($1, $2, 'Snow')`,
+      [slots[0].id, ward.id]
+    )
+    assert.equal(await count(ward.id, 'booking'), 1)
+
+    // Even asked for outright a second time.
+    const { rows: [appt] } = await client.query(
+      'select id from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+    const again = await client.query('select public.queue_booking_alerts($1) as n', [appt.id])
+    assert.equal(again.rows[0].n, 0)
+    assert.equal(await count(ward.id, 'booking'), 1)
+  })
+
+  await t.test('the constraint holds even against a direct insert', async () => {
+    // The rule is the index, not the function that respects it.
+    const { ward, slots } = await seedWard(client, { slug: 'dup-index' })
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, email)
+       values ($1, $2, 'Young', 'young@example.test')`,
+      [slots[0].id, ward.id]
+    )
+    const { rows: [appt] } = await client.query(
+      'select id from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+    await client.query('select public.queue_notification($1, $2)', [appt.id, 'confirmation'])
+
+    let refusedSecond = false
+    try {
+      await client.query(
+        `insert into public.notifications (ward_id, kind, to_address, body, dedupe_key)
+         values ($1, 'confirmation', 'young@example.test', 'x',
+                 format('confirmation:%s:%s', $2::uuid, 'young@example.test'))`,
+        [ward.id, appt.id]
+      )
+    } catch {
+      refusedSecond = true
+    }
+    assert.equal(refusedSecond, true, 'the unique index did not hold')
+  })
+
+  await t.test('a reschedule may be announced more than once', async () => {
+    // Deliberately un-keyed: moving twice should be told twice.
+    const { ward, slots } = await seedWard(client, { slug: 'dup-reschedule' })
+    const { rows: [made] } = await asAnon(client, () =>
+      client.query('select * from public.book_slot($1, $2, $3, $4, $5)', [
+        'dup-reschedule', slots[0].id, 'Grant', '8015551501', 'grant@example.test',
+      ])
+    )
+    await asAnon(client, () =>
+      client.query('select * from public.reschedule_appointment($1, $2)', [
+        made.cancel_token, slots[2].id,
+      ])
+    )
+    await asAnon(client, () =>
+      client.query('select * from public.reschedule_appointment($1, $2)', [
+        made.cancel_token, slots[4].id,
+      ])
+    )
+    assert.equal(await count(ward.id, 'reschedule'), 2)
+  })
+
+  await t.test('a reminder set aside by a move can be queued again', async () => {
+    // The index ignores 'skipped', which is what makes room for the new one.
+    const { ward, day } = await seedWard(client, { slug: 'dup-aftermove' })
+    await client.query('delete from public.slots where day_id = $1', [day.id])
+    const made = []
+    for (const mins of [20 * 60, 21 * 60]) {
+      const { rows: [slot] } = await client.query(
+        `insert into public.slots (day_id, starts_at)
+         values ($1, now() + make_interval(mins => $2)) returning *`,
+        [day.id, mins]
+      )
+      made.push(slot)
+    }
+    await client.query(
+      `insert into public.appointments (slot_id, ward_id, family_name, email)
+       values ($1, $2, 'Lund', 'lund@example.test')`,
+      [made[0].id, ward.id]
+    )
+    await client.query('select public.queue_due_reminders()')
+
+    const { rows: [appt] } = await client.query(
+      'select cancel_token from public.appointments where ward_id = $1',
+      [ward.id]
+    )
+    await asAnon(client, () =>
+      client.query('select * from public.reschedule_appointment($1, $2)', [
+        appt.cancel_token, made[1].id,
+      ])
+    )
+    const { rows } = await client.query('select public.queue_due_reminders() as n')
+    assert.equal(rows[0].n, 1, 'the replacement reminder was blocked by the one it replaced')
+  })
+})
